@@ -3339,4 +3339,4 @@ with tabs[1]:
         # no mostrar constantes en detalle
         df_detalle = df_buro.drop(columns=columnas_constantes_pf, errors="ignore")
 
-        st.dataframe(df_detalle, use_container_width=True, hide_index=True
+        st.dataframe(df_detalle, use_container_width=True, hide_index=True)
