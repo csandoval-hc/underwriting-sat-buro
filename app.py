@@ -57,11 +57,38 @@ load_dotenv()
 LOGO_PATH = ROOT / "src" / "underwriting" / "assets" / "HayCash_Logo_FC_RGB.png"
 FAVICON_PATH = ROOT / "src" / "underwriting" / "assets" / "HayCash_Simbolo_FC_RGB.png"
 
+# ✅ 1. Sidebar starts collapsed
 st.set_page_config(
     page_title="Underwriting",
     page_icon=str(FAVICON_PATH),  # ✅ favicon
     layout="wide",
+    initial_sidebar_state="collapsed", 
 )
+
+# ✅ 2. PDF Download Helper
+def render_pdf_download_button():
+    components.html(
+        """
+        <script>
+        function printPage() {
+            window.print();
+        }
+        </script>
+        <div style="display: flex; justify-content: flex-end;">
+            <button onclick="printPage()" style="
+                background-color: #ff4b4b;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-weight: bold;
+                font-family: sans-serif;
+            ">📄 Descargar PDF</button>
+        </div>
+        """,
+        height=45,
+    )
 
 # =============================================================================
 # 🔐 AUTHENTICATION GATE
@@ -136,6 +163,17 @@ div[data-testid="stAppViewContainer"] .main .block-container{
 
 .uw-topbar-spacer{
   height: 0.5rem;   /* ajusta: 5.0–7.0rem */
+}
+
+/* Hide UI elements on print */
+@media print {
+    div[data-testid="stSidebar"], 
+    .uw-topbar, 
+    button, 
+    [data-testid="stHeader"], 
+    [data-testid="stTabs"] > div:first-child {
+        display: none !important;
+    }
 }
 
 </style>
@@ -1027,7 +1065,7 @@ def _reset_range_cb() -> None:
 
 def _anchor_end_from_headers(h_ing: pd.DataFrame | None, h_egr: pd.DataFrame | None) -> pd.Timestamp:
     """
-    Devuelve el 'end' exclusivo (primer día del mes siguiente) basado en la fecha más reciente
+    Devuelve the 'end' exclusivo (primer día del mes siguiente) basado en la fecha más reciente
     disponible en los headers (emitidos/recibidos). Si no hay fechas válidas, cae a hoy.
     """
     dts = []
@@ -1340,7 +1378,7 @@ def build_proveedores_net_table(
     rfc: str,
     egr_headers: pd.DataFrame | None,
 ) -> pd.DataFrame:
-    """Proveedores (desde CFDI XML) con gasto NETO (I recibidas - E recibidas) por proveedor."""
+    """Proveedores (desde CFDI XML) with gasto NETO (I recibidas - E recibidas) por proveedor."""
     r = (rfc or "").strip().upper()
     H = _ensure_header_cols(egr_headers)
 
@@ -1838,6 +1876,9 @@ if run:
 # TAB 0: SAT
 # =============================================================================
 with tabs[0]:
+    # ✅ PDF Download Button at the top
+    render_pdf_download_button()
+
     st.caption("SAT →  Tax Status → Actividades económicas y regímenes")
 
     # Fecha de última extracción (Syntage)
@@ -2634,6 +2675,8 @@ with tabs[0]:
 # TAB 1: BURO
 # =============================================================================
 with tabs[1]:
+    # ✅ PDF Download Button at the top
+    render_pdf_download_button()
 
     st.caption("Buró de Crédito → Moffin (PF / PM)")
 
@@ -3325,6 +3368,7 @@ with tabs[1]:
 
                 if "peor_mop" in df_buro.columns:
                     df_mop = (
+                        df_mop = (
                         df_buro
                         .groupby("peor_mop", dropna=False)
                         .size()
