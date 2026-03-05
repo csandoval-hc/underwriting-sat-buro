@@ -240,14 +240,14 @@ def fetch_cap_table_df(
         "df": res.cap_table,
     }
 
-
-@st.cache_data(show_spinner=False, ttl=60 * 10)
+# ✅ [FIX] Changed cache_data to cache_resource to fix serialization errors
+@st.cache_resource(show_spinner=False, ttl=60 * 10)
 def fetch_tax_status(rfc: str):
     service = get_service()
     return service.get_tax_status(_clean_rfc(rfc))  # ✅ [FIX]
 
-
-@st.cache_data(show_spinner=False, ttl=60 * 10)
+# ✅ [FIX] Changed cache_data to cache_resource to fix serialization errors
+@st.cache_resource(show_spinner=False, ttl=60 * 10)
 def fetch_cfdi(rfc: str, source: str, date_from: date | None, date_to: date | None, local_dir: str):
     service = get_cfdi_service()
     if source == "local":
