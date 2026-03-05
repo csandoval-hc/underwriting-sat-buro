@@ -10,19 +10,28 @@ def require_login() -> str:
     password = st.text_input("Contraseña", type="password")
 
     if st.button("Entrar", type="primary", use_container_width=True):
-        # Access the nested structure [auth.users] from secrets
-        auth_secrets = st.secrets.get("auth", {})
-        users = auth_secrets.get("users", {})
-
-        if not isinstance(users, dict) or not users:
-            st.error("No hay usuarios configurados en Secrets ([auth.users]).")
+        # Try different ways Streamlit might store your secrets
+        users = {}
+        
+        if "auth" in st.secrets and "users" in st.secrets["auth"]:
+            # Case for [auth.users]
+            users = st.secrets["auth"]["users"]
+        elif "USERS" in st.secrets:
+            # Case for [USERS]
+            users = st.secrets["USERS"]
+            
+        if not users:
+            st.error("No se encontró la configuración de usuarios. Revisa que en Secrets tengas el formato [auth.users]")
             st.stop()
 
+        # Get the stored password for the typed username
+        # Use .get() to handle case where user doesn't exist
         stored_password = users.get(username)
-        
-        # Check if user exists and password matches plain text
+
+        # Check plain text match
         if stored_password and str(stored_password) == password:
             st.session_state["auth_user"] = username
+            # Success!
             st.rerun()
         else:
             st.error("Usuario o contraseña incorrectos.")
@@ -32,5 +41,6 @@ def require_login() -> str:
 
 def logout_button() -> None:
     if st.button("Cerrar sesión", use_container_width=True):
-        st.session_state.pop("auth_user", None)
+        for key in list(st.session_state.keys()):
+            st.session_state.pop(key)
         st.rerun()
