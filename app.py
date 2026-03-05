@@ -57,7 +57,7 @@ load_dotenv()
 LOGO_PATH = ROOT / "src" / "underwriting" / "assets" / "HayCash_Logo_FC_RGB.png"
 FAVICON_PATH = ROOT / "src" / "underwriting" / "assets" / "HayCash_Simbolo_FC_RGB.png"
 
-# ✅ 1. Sidebar starts collapsed
+# ✅ Configuración de página con Sidebar contraído por defecto
 st.set_page_config(
     page_title="Underwriting",
     page_icon=str(FAVICON_PATH),  # ✅ favicon
@@ -65,7 +65,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed", 
 )
 
-# ✅ 2. PDF Download Helper
+# ✅ Botón de Descarga PDF
 def render_pdf_download_button():
     components.html(
         """
@@ -95,7 +95,7 @@ def render_pdf_download_button():
 # =============================================================================
 user_logged_in = require_login()
 
-# Optional: Add user info and logout to sidebar
+# Información de usuario en el sidebar
 with st.sidebar:
     st.markdown(f"👤 **Usuario:** {user_logged_in}")
     logout_button()
@@ -165,7 +165,7 @@ div[data-testid="stAppViewContainer"] .main .block-container{
   height: 0.5rem;   /* ajusta: 5.0–7.0rem */
 }
 
-/* Hide UI elements on print */
+/* Ocultar elementos en la impresión para reporte limpio */
 @media print {
     div[data-testid="stSidebar"], 
     .uw-topbar, 
@@ -2675,7 +2675,7 @@ with tabs[0]:
 # TAB 1: BURO
 # =============================================================================
 with tabs[1]:
-    # ✅ PDF Download Button at the top
+    # ✅ Botón de Descarga PDF en la pestaña Buró
     render_pdf_download_button()
 
     st.caption("Buró de Crédito → Moffin (PF / PM)")
@@ -3368,7 +3368,6 @@ with tabs[1]:
 
                 if "peor_mop" in df_buro.columns:
                     df_mop = (
-                        df_mop = (
                         df_buro
                         .groupby("peor_mop", dropna=False)
                         .size()
