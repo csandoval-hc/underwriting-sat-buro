@@ -1,7 +1,6 @@
 # Ruta: app.py
 # Archivo: app.py
 
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,6 +24,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
+# --- AUTH INTEGRATION ---
+from auth import require_login, logout_button
 
 def _bootstrap_env_from_secrets() -> None:
     """Expose Streamlit secrets as env vars so existing services keep working."""
@@ -54,15 +55,26 @@ from underwriting.application.cap_table_service import CapTableService
 load_dotenv()
 
 LOGO_PATH = ROOT / "src" / "underwriting" / "assets" / "HayCash_Logo_FC_RGB.png"
-
 FAVICON_PATH = ROOT / "src" / "underwriting" / "assets" / "HayCash_Simbolo_FC_RGB.png"
+
 st.set_page_config(
     page_title="Underwriting",
     page_icon=str(FAVICON_PATH),  # ✅ favicon
     layout="wide",
 )
-_bootstrap_env_from_secrets()
 
+# =============================================================================
+# 🔐 AUTHENTICATION GATE
+# =============================================================================
+user_logged_in = require_login()
+
+# Optional: Add user info and logout to sidebar
+with st.sidebar:
+    st.markdown(f"👤 **Usuario:** {user_logged_in}")
+    logout_button()
+    st.divider()
+
+_bootstrap_env_from_secrets()
 
 st.markdown(
     """
@@ -130,8 +142,6 @@ div[data-testid="stAppViewContainer"] .main .block-container{
 """,
     unsafe_allow_html=True,
 )
-
-
 
 
 # =============================================================================
@@ -1339,7 +1349,7 @@ def build_proveedores_net_table(
             columns=[
                 "RFC",
                 "Proveedor",
-                "# CFDI",
+                " # CFDI",
                 "Compras (I)",
                 "Notas crédito (E)",
                 "Recibido Neto",
