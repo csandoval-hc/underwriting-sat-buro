@@ -1,0 +1,9 @@
+streamlit==1.37.1
+requests==2.32.3
+python-dotenv==1.0.1
+pydantic==2.8.2
+pandas==2.2.2
+python-dateutil==2.9.0.post0
+altair==4.2.2
+streamlit-aggrid==1.0.5
+numpy==1.26.4
