@@ -3399,8 +3399,7 @@ with tabs[2]:
     # ✅ PDF Download Button at the top of Facturas
     render_pdf_download_button()
     
-    st.subheader("Facturas (CFDI)")
-    st.caption("Vista de facturas listadas por Syntage (emitidas y recibidas)")
+    st.caption("Facturas (CFDI) → Vista de facturas listadas por Syntage (emitidas y recibidas)")
 
     # Facturas Logic Helpers
     def _render_facturas_df(df: pd.DataFrame, *, key: str, money_cols: list[str] | None = None) -> None:
@@ -3428,46 +3427,9 @@ with tabs[2]:
 
     # UI Content
     cfdi_data_fact = st.session_state.get("cfdi_data")
-    last_rfc_fact = st.session_state.get("last_rfc")
-
-    with st.container(border=True):
-        c1, c2, c3, c4 = st.columns([2.2, 1.3, 1.3, 1.2])
-
-        with c1:
-            rfc_in_fact = st.text_input("RFC (Facturas)", value=last_rfc_fact or "", placeholder="PEIC211118IS0", key="facturas_rfc_tab")
-            rfc_fact = _clean_rfc(rfc_in_fact)
-
-        with c2:
-            d_from_fact = st.date_input(
-                "Desde (Facturas)",
-                value=st.session_state.get("cfdi_date_from") or (date.today().replace(day=1)),
-                key="facturas_from_tab",
-            )
-
-        with c3:
-            d_to_fact = st.date_input(
-                "Hasta (Facturas)",
-                value=st.session_state.get("cfdi_date_to") or (date.today()),
-                key="facturas_to_tab",
-            )
-
-        with c4:
-            run_fact = st.button("Cargar Facturas", type="primary", use_container_width=True, disabled=not (12 <= len(rfc_fact) <= 13))
-
-    if run_fact:
-        with st.spinner("Consultando facturas en Syntage…"):
-            local_dir_fact = str(ROOT / "data" / "cfdi_xml")
-            try:
-                cfdi_data_fact = fetch_cfdi(rfc=rfc_fact, source="syntage", date_from=d_from_fact, date_to=d_to_fact, local_dir=local_dir_fact)
-                st.session_state["cfdi_data"] = cfdi_data_fact
-                st.session_state["last_rfc"] = rfc_fact
-            except Exception as e:
-                st.error(f"Error consultando facturas: {e}")
-                cfdi_data_fact = None
 
     if not cfdi_data_fact:
-        # ✅ Added the standard "No hay información disponible." text before the prompt to calculate
-        st.info("No hay información disponible. Carga un RFC y rango, o primero presiona **Calcular** arriba para reutilizar el cache.")
+        st.info("Ingresa un RFC arriba, selecciona fuente/rango CFDI y presiona Calcular.")
     else:
         emit_df = cfdi_data_fact.get("emit_invoices_df", pd.DataFrame())
         rec_df = cfdi_data_fact.get("rec_invoices_df", pd.DataFrame())
