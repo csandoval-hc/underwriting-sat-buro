@@ -2696,709 +2696,709 @@ with tabs[1]:
     if run:
         if not rfc_valid:
             st.warning("RFC inválido.")
-            st.stop()
+        else:
+            if (
+                st.session_state.df_buro is None
+                or st.session_state.last_rfc != rfc
+            ):
+                with st.spinner("Consultando Buró de Crédito..."):
+                    try:
+                        resultado = obtener_buro_moffin_por_rfc(rfc)
 
-        if (
-            st.session_state.df_buro is None
-            or st.session_state.last_rfc != rfc
-        ):
-            with st.spinner("Consultando Buró de Crédito..."):
-                try:
-                    resultado = obtener_buro_moffin_por_rfc(rfc)
+                        # PF -> df
+                        # PM -> (df, personas) en tu implementación nueva
+                        if isinstance(resultado, tuple):
+                            df_buro, personas_pm = resultado
+                            st.session_state.personas_pm = personas_pm
+                        else:
+                            df_buro = resultado
+                            st.session_state.personas_pm = None
 
-                    # PF -> df
-                    # PM -> (df, personas) en tu implementación nueva
-                    if isinstance(resultado, tuple):
-                        df_buro, personas_pm = resultado
-                        st.session_state.personas_pm = personas_pm
-                    else:
-                        df_buro = resultado
-                        st.session_state.personas_pm = None
+                        st.session_state.df_buro = df_buro
+                        st.session_state.last_rfc = rfc
+                        st.session_state.df_editor_pm = None
 
-                    st.session_state.df_buro = df_buro
-                    st.session_state.last_rfc = rfc
-                    st.session_state.df_editor_pm = None
-
-                except Exception as e:
-                    st.error(f"Error: {e}")
-                    st.stop()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
     df_buro = st.session_state.df_buro
 
     if df_buro is None or df_buro.empty:
         st.info("No hay información disponible.")
-        st.stop()
-
-    # =====================================================
-    # DETECTAR TIPO RFC
-    # =====================================================
-    es_pf = len(rfc.strip()) == 13
-    es_pm = len(rfc.strip()) == 12
-
-    # =====================================================
-    # ==================== PERSONA MORAL ==================
-    # =====================================================
-    if es_pm:
+    else:
+        # =====================================================
+        # DETECTAR TIPO RFC
+        # =====================================================
+        es_pf = len(rfc.strip()) == 13
+        es_pm = len(rfc.strip()) == 12
 
         # =====================================================
-        # PREPARAR TABLA
+        # ==================== PERSONA MORAL ==================
         # =====================================================
-        cols_visibles = [
-            c for c in df_buro.columns
-            if c not in ["Fecha Consulta", "MontoTotalPagar"]
-        ]
-        df_tabla = df_buro[cols_visibles].copy()
+        if es_pm:
 
-        # saldo numérico para abiertos/cerrados
-        if "Saldo Actual" in df_tabla.columns:
-            df_tabla["_monto_num"] = pd.to_numeric(
-                df_tabla["Saldo Actual"].astype(str)
-                .str.replace("$", "", regex=False)
-                .str.replace(",", "", regex=False),
-                errors="coerce"
-            ).fillna(0)
-        else:
-            df_tabla["_monto_num"] = 0.0
+            # =====================================================
+            # PREPARAR TABLA
+            # =====================================================
+            cols_visibles = [
+                c for c in df_buro.columns
+                if c not in ["Fecha Consulta", "MontoTotalPagar"]
+            ]
+            df_tabla = df_buro[cols_visibles].copy()
 
-        df_abiertos = df_tabla[df_tabla["_monto_num"] > 0].drop(columns="_monto_num")
-        df_cerrados = df_tabla[df_tabla["_monto_num"] == 0].drop(columns="_monto_num")
+            # saldo numérico para abiertos/cerrados
+            if "Saldo Actual" in df_tabla.columns:
+                df_tabla["_monto_num"] = pd.to_numeric(
+                    df_tabla["Saldo Actual"].astype(str)
+                    .str.replace("$", "", regex=False)
+                    .str.replace(",", "", regex=False),
+                    errors="coerce"
+                ).fillna(0)
+            else:
+                df_tabla["_monto_num"] = 0.0
 
-        # =====================================================
-        # INICIALIZAR EDITOR
-        # =====================================================
-        if not df_abiertos.empty:
+            df_abiertos = df_tabla[df_tabla["_monto_num"] > 0].drop(columns="_monto_num")
+            df_cerrados = df_tabla[df_tabla["_monto_num"] == 0].drop(columns="_monto_num")
 
-            if st.session_state.df_editor_pm is None:
-                df_init = df_abiertos.copy()
+            # =====================================================
+            # INICIALIZAR EDITOR
+            # =====================================================
+            if not df_abiertos.empty:
 
-                if {"pago_a", "pago_b", "pago_c", "pago_d"}.issubset(df_init.columns):
-                    df_init["Forma de pago"] = "A"
-                    df_init["valor_x"] = df_init["pago_a"]
-                else:
-                    df_init["valor_x"] = 0.0
+                if st.session_state.df_editor_pm is None:
+                    df_init = df_abiertos.copy()
 
-                st.session_state.df_editor_pm = df_init
+                    if {"pago_a", "pago_b", "pago_c", "pago_d"}.issubset(df_init.columns):
+                        df_init["Forma de pago"] = "A"
+                        df_init["valor_x"] = df_init["pago_a"]
+                    else:
+                        df_init["valor_x"] = 0.0
 
-            df_editado = st.session_state.df_editor_pm.copy()
+                    st.session_state.df_editor_pm = df_init
 
-            mapa = {"A": "pago_a", "B": "pago_b", "C": "pago_c", "D": "pago_d"}
+                df_editado = st.session_state.df_editor_pm.copy()
 
-            # SOLO recalcular si NO es Manual
-            if "Forma de pago" in df_editado.columns:
-                for i, row in df_editado.iterrows():
-                    forma = row.get("Forma de pago")
-                    if forma in mapa and mapa[forma] in df_editado.columns:
-                        df_editado.at[i, "valor_x"] = row[mapa[forma]]
+                mapa = {"A": "pago_a", "B": "pago_b", "C": "pago_c", "D": "pago_d"}
 
-            df_editado["valor_x"] = pd.to_numeric(df_editado.get("valor_x"), errors="coerce").fillna(0).round(2)
-        else:
-            df_editado = pd.DataFrame()
+                # SOLO recalcular si NO es Manual
+                if "Forma de pago" in df_editado.columns:
+                    for i, row in df_editado.iterrows():
+                        forma = row.get("Forma de pago")
+                        if forma in mapa and mapa[forma] in df_editado.columns:
+                            df_editado.at[i, "valor_x"] = row[mapa[forma]]
 
-        # =====================================================
-        # BANDA 1 - HEADER
-        # =====================================================
-        fecha_consulta = df_buro["Fecha Consulta"].iloc[0] if "Fecha Consulta" in df_buro.columns else "N/A"
-        total_dinamico = df_editado["valor_x"].sum() if not df_editado.empty and "valor_x" in df_editado.columns else 0.0
+                df_editado["valor_x"] = pd.to_numeric(df_editado.get("valor_x"), errors="coerce").fillna(0).round(2)
+            else:
+                df_editado = pd.DataFrame()
 
-        col_info, col_fecha, col_kpi = st.columns(3)
+            # =====================================================
+            # BANDA 1 - HEADER
+            # =====================================================
+            fecha_consulta = df_buro["Fecha Consulta"].iloc[0] if "Fecha Consulta" in df_buro.columns else "N/A"
+            total_dinamico = df_editado["valor_x"].sum() if not df_editado.empty and "valor_x" in df_editado.columns else 0.0
 
-        with col_info:
-            st.markdown("""
-            **Formas de pago**
-            - **A:** Saldo vigente / plazo  
-            - **B:** Promedio pagado  
-            - **C:** 10% saldo vigente  
-            - **D:** Saldo inicial / plazo  
-            - **Manual:** Editable libremente  
-            """)
+            col_info, col_fecha, col_kpi = st.columns(3)
 
-        with col_fecha:
-            st.metric("Fecha de consulta", f"{fecha_consulta}")
+            with col_info:
+                st.markdown("""
+                **Formas de pago**
+                - **A:** Saldo vigente / plazo  
+                - **B:** Promedio pagado  
+                - **C:** 10% saldo vigente  
+                - **D:** Saldo inicial / plazo  
+                - **Manual:** Editable libremente  
+                """)
 
-        with col_kpi:
-            st.metric("Pago mensual consolidado", _money(total_dinamico))
+            with col_fecha:
+                st.metric("Fecha de consulta", f"{fecha_consulta}")
 
-    
+            with col_kpi:
+                st.metric("Pago mensual consolidado", _money(total_dinamico))
 
-        # =====================================================
-        # BANDA 2 - RESUMEN + DONUTS
-        # =====================================================
-        col_resumen, col_donut = st.columns(2)
+        
 
-        # ---- DONUT + TABLA POR TIPO (numero de creditos) ----
-        with col_resumen:
-            with st.container(border=True):
-                st.markdown("### 📊 Distribución por tipo de crédito")
+            # =====================================================
+            # BANDA 2 - RESUMEN + DONUTS
+            # =====================================================
+            col_resumen, col_donut = st.columns(2)
 
-                if not df_editado.empty and "Tipo de contrato" in df_editado.columns:
-                    df_tipo = (
-                        df_editado
-                        .groupby("Tipo de contrato")
-                        .agg(numero_creditos=("Tipo de contrato", "count"),
-                             pago_mensual_total=("valor_x", "sum"))
-                        .reset_index()
-                    )
+            # ---- DONUT + TABLA POR TIPO (numero de creditos) ----
+            with col_resumen:
+                with st.container(border=True):
+                    st.markdown("### 📊 Distribución por tipo de crédito")
 
-                    # donut por # de créditos
-                    df_pie_tipo = df_tipo.copy()
-                    df_pie_tipo["_total_num"] = df_pie_tipo["numero_creditos"]
-                    df_pie_tipo["name"] = df_pie_tipo["Tipo de contrato"].astype(str)
+                    if not df_editado.empty and "Tipo de contrato" in df_editado.columns:
+                        df_tipo = (
+                            df_editado
+                            .groupby("Tipo de contrato")
+                            .agg(numero_creditos=("Tipo de contrato", "count"),
+                                 pago_mensual_total=("valor_x", "sum"))
+                            .reset_index()
+                        )
 
-                    _render_donut(df_pie_tipo, title="Distribución", value_col="_total_num", label_col="name")
+                        # donut por # de créditos
+                        df_pie_tipo = df_tipo.copy()
+                        df_pie_tipo["_total_num"] = df_pie_tipo["numero_creditos"]
+                        df_pie_tipo["name"] = df_pie_tipo["Tipo de contrato"].astype(str)
 
-                    # tabla abajo
-                    df_tipo["Participación %"] = (
-                        df_tipo["numero_creditos"] / df_tipo["numero_creditos"].sum()
-                    ).apply(lambda x: f"{x:.1%}")
+                        _render_donut(df_pie_tipo, title="Distribución", value_col="_total_num", label_col="name")
 
-                    df_tipo["Pago Mensual Total"] = df_tipo["pago_mensual_total"].apply(lambda x: f"${x:,.2f}")
-                    df_show = df_tipo.rename(columns={"numero_creditos": "# Créditos"})[
-                        ["Tipo de contrato", "# Créditos", "Participación %", "Pago Mensual Total"]
-                    ]
+                        # tabla abajo
+                        df_tipo["Participación %"] = (
+                            df_tipo["numero_creditos"] / df_tipo["numero_creditos"].sum()
+                        ).apply(lambda x: f"{x:.1%}")
 
-                    st.dataframe(df_show, use_container_width=True, hide_index=True)
-                else:
-                    st.info("Sin datos suficientes para distribución por tipo.")
+                        df_tipo["Pago Mensual Total"] = df_tipo["pago_mensual_total"].apply(lambda x: f"${x:,.2f}")
+                        df_show = df_tipo.rename(columns={"numero_creditos": "# Créditos"})[
+                            ["Tipo de contrato", "# Créditos", "Participación %", "Pago Mensual Total"]
+                        ]
 
-        # ---- DONUT + TABLA POR PEOR MOP (incluye cerrados) ----
-        with col_donut:
-            with st.container(border=True):
-                st.markdown("### 🚨 Distribución por severidad (Peor MOP)")
+                        st.dataframe(df_show, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Sin datos suficientes para distribución por tipo.")
 
-                if "peor_mop" in df_buro.columns:
-                    df_mop = pd.concat([df_editado, df_cerrados], ignore_index=True).copy()
-                    df_mop["peor_mop"] = pd.to_numeric(df_mop["peor_mop"], errors="coerce")
+            # ---- DONUT + TABLA POR PEOR MOP (incluye cerrados) ----
+            with col_donut:
+                with st.container(border=True):
+                    st.markdown("### 🚨 Distribución por severidad (Peor MOP)")
 
-                    df_pie = (
-                        df_mop
-                        .groupby("peor_mop", dropna=False)
-                        .size()
-                        .reset_index(name="_total_num")
-                    )
+                    if "peor_mop" in df_buro.columns:
+                        df_mop = pd.concat([df_editado, df_cerrados], ignore_index=True).copy()
+                        df_mop["peor_mop"] = pd.to_numeric(df_mop["peor_mop"], errors="coerce")
 
-                    df_pie["name"] = df_pie["peor_mop"].fillna("Sin historial").astype(str)
+                        df_pie = (
+                            df_mop
+                            .groupby("peor_mop", dropna=False)
+                            .size()
+                            .reset_index(name="_total_num")
+                        )
 
-                    _render_donut(df_pie, title="Distribución", value_col="_total_num", label_col="name")
+                        df_pie["name"] = df_pie["peor_mop"].fillna("Sin historial").astype(str)
 
-                    df_pie["Participación %"] = (
-                        df_pie["_total_num"] / df_pie["_total_num"].sum()
-                    ).apply(lambda x: f"{x:.1%}")
+                        _render_donut(df_pie, title="Distribución", value_col="_total_num", label_col="name")
 
-                    df_show = df_pie.rename(columns={"name": "Peor MOP", "_total_num": "# Créditos"})[
-                        ["Peor MOP", "# Créditos", "Participación %"]
-                    ]
+                        df_pie["Participación %"] = (
+                            df_pie["_total_num"] / df_pie["_total_num"].sum()
+                        ).apply(lambda x: f"{x:.1%}")
 
-                    st.dataframe(df_show, use_container_width=True, hide_index=True)
-                else:
-                    st.info("No se encontró 'peor_mop' en el buró.")
+                        df_show = df_pie.rename(columns={"name": "Peor MOP", "_total_num": "# Créditos"})[
+                            ["Peor MOP", "# Créditos", "Participación %"]
+                        ]
 
-        st.markdown("---")
-
-        # =====================================================
-        # BANDA 3 - CREDITOS ABIERTOS (editable) + % ocupación visible
-        # =====================================================
-        st.markdown("### ✅ Créditos abiertos")
-
-        if df_abiertos.empty:
-            st.info("No se encontraron créditos abiertos.")
-        else:
-            # construir columna visual % Ocupación
-            if "Porcentaje Ocupación" in df_editado.columns:
-                df_editado["Porcentaje Ocupación"] = pd.to_numeric(df_editado["Porcentaje Ocupación"], errors="coerce")
-
-                def format_ocupacion(val):
-                    if pd.isna(val):
-                        return ""
-                    return f"🔴 {val:.0%}" if val > 0.98 else f"🟢 {val:.0%}"
-
-                df_editado["% Ocupación"] = df_editado["Porcentaje Ocupación"].apply(format_ocupacion)
-
-            df_editado = st.data_editor(
-                df_editado,
-                key="editor_buro_pm",
-                column_config={
-                    "Forma de pago": st.column_config.SelectboxColumn(
-                        "Forma de pago",
-                        options=["A", "B", "C", "D", "Manual"],
-                        required=True,
-                    ),
-                    "valor_x": st.column_config.NumberColumn(
-                        "Pago seleccionado",
-                        format="$%.2f",
-                        min_value=0.0
-                    ),
-                    "% Ocupación": st.column_config.TextColumn(
-                        "% Ocupación",
-                        disabled=True,
-                    ),
-                    # ocultar técnicas
-                    "pago_a": None,
-                    "pago_b": None,
-                    "pago_c": None,
-                    "pago_d": None,
-                    "Porcentaje Ocupación": None,
-                    "last_update": None,
-                },
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            # guardar cambios del editor
-            st.session_state.df_editor_pm = df_editado
-
-            # recalcular KPI con lo editado (incluye Manual)
-            total_dinamico = pd.to_numeric(df_editado["valor_x"], errors="coerce").fillna(0).sum()
-            col_kpi.metric("Pago mensual consolidado", _money(total_dinamico))
-
-        st.markdown("---")
-
-        # =====================================================
-        # CREDITOS CERRADOS
-        # =====================================================
-        st.markdown("### ⛔ Créditos cerrados")
-
-        if df_cerrados.empty:
-            st.info("No se encontraron créditos cerrados.")
-        else:
-            st.dataframe(
-                df_cerrados.drop(
-                    columns=["pago_a", "pago_b", "pago_c", "pago_d", "valor_x", "last_update", "Porcentaje Ocupación"],
-                    errors="ignore"
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        # =====================================================
-        # ACCIONISTAS (AUTOMÁTICOS + MANUALES)
-        # =====================================================
-        if "personas_pm" in st.session_state and st.session_state.personas_pm is not None:
-
-            if "rfcs_extra_pm" not in st.session_state:
-                st.session_state.rfcs_extra_pm = []
-
-            df_personas = st.session_state.personas_pm
+                        st.dataframe(df_show, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No se encontró 'peor_mop' en el buró.")
 
             st.markdown("---")
-            st.markdown("## 👥 Accionistas")
 
             # =====================================================
-            # 1️⃣ Construir lista de RFCs automáticos
+            # BANDA 3 - CREDITOS ABIERTOS (editable) + % ocupación visible
             # =====================================================
-            rfcs_base = []
-            labels_base = []
+            st.markdown("### ✅ Créditos abiertos")
 
-            if not df_personas.empty:
-                for _, row in df_personas.iterrows():
-                    nombre = str(row["nombreAccionista"]).title()
-                    rfc_acc = row["rfc"]
-                    rfcs_base.append(rfc_acc)
-                    labels_base.append(f"👤 {nombre} ({rfc_acc})")
+            if df_abiertos.empty:
+                st.info("No se encontraron créditos abiertos.")
+            else:
+                # construir columna visual % Ocupación
+                if "Porcentaje Ocupación" in df_editado.columns:
+                    df_editado["Porcentaje Ocupación"] = pd.to_numeric(df_editado["Porcentaje Ocupación"], errors="coerce")
+
+                    def format_ocupacion(val):
+                        if pd.isna(val):
+                            return ""
+                        return f"🔴 {val:.0%}" if val > 0.98 else f"🟢 {val:.0%}"
+
+                    df_editado["% Ocupación"] = df_editado["Porcentaje Ocupación"].apply(format_ocupacion)
+
+                df_editado = st.data_editor(
+                    df_editado,
+                    key="editor_buro_pm",
+                    column_config={
+                        "Forma de pago": st.column_config.SelectboxColumn(
+                            "Forma de pago",
+                            options=["A", "B", "C", "D", "Manual"],
+                            required=True,
+                        ),
+                        "valor_x": st.column_config.NumberColumn(
+                            "Pago seleccionado",
+                            format="$%.2f",
+                            min_value=0.0
+                        ),
+                        "% Ocupación": st.column_config.TextColumn(
+                            "% Ocupación",
+                            disabled=True,
+                        ),
+                        # ocultar técnicas
+                        "pago_a": None,
+                        "pago_b": None,
+                        "pago_c": None,
+                        "pago_d": None,
+                        "Porcentaje Ocupación": None,
+                        "last_update": None,
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                # guardar cambios del editor
+                st.session_state.df_editor_pm = df_editado
+
+                # recalcular KPI con lo editado (incluye Manual)
+                total_dinamico = pd.to_numeric(df_editado["valor_x"], errors="coerce").fillna(0).sum()
+                col_kpi.metric("Pago mensual consolidado", _money(total_dinamico))
+
+            st.markdown("---")
 
             # =====================================================
-            # 2️⃣ RFCs agregados manualmente
+            # CREDITOS CERRADOS
             # =====================================================
-            rfcs_extra = st.session_state.rfcs_extra_pm
-            labels_extra = [f"➕ Manual ({r})" for r in rfcs_extra]
+            st.markdown("### ⛔ Créditos cerrados")
+
+            if df_cerrados.empty:
+                st.info("No se encontraron créditos cerrados.")
+            else:
+                st.dataframe(
+                    df_cerrados.drop(
+                        columns=["pago_a", "pago_b", "pago_c", "pago_d", "valor_x", "last_update", "Porcentaje Ocupación"],
+                        errors="ignore"
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
             # =====================================================
-            # 3️⃣ Construir tabs dinámicos
+            # ACCIONISTAS (AUTOMÁTICOS + MANUALES)
             # =====================================================
-            tabs_labels = labels_base + labels_extra + ["➕"]
+            if "personas_pm" in st.session_state and st.session_state.personas_pm is not None:
 
-            tabs_dinamicos_buro = st.tabs(tabs_labels)
+                if "rfcs_extra_pm" not in st.session_state:
+                    st.session_state.rfcs_extra_pm = []
 
-            # =====================================================
-            # 4️⃣ Renderizar accionistas automáticos
-            # =====================================================
-            for i, rfc_accionista in enumerate(rfcs_base):
+                df_personas = st.session_state.personas_pm
 
-                with tabs_dinamicos_buro[i]:
+                st.markdown("---")
+                st.markdown("## 👥 Accionistas")
 
-                    try:
-                        df_pf = obtener_buro_moffin_por_rfc(rfc_accionista)
-                    except Exception:
-                        st.warning("No se pudo consultar el buró del accionista.")
-                        continue
+                # =====================================================
+                # 1️⃣ Construir lista de RFCs automáticos
+                # =====================================================
+                rfcs_base = []
+                labels_base = []
 
-                    if df_pf is None or df_pf.empty:
-                        st.info("Sin información de buró.")
-                        continue
+                if not df_personas.empty:
+                    for _, row in df_personas.iterrows():
+                        nombre = str(row["nombreAccionista"]).title()
+                        rfc_acc = row["rfc"]
+                        rfcs_base.append(rfc_acc)
+                        labels_base.append(f"👤 {nombre} ({rfc_acc})")
 
-                    # ---------------- HEADER PF ----------------
-                    fecha_consulta = df_pf["Fecha Consulta"].iloc[0] if "Fecha Consulta" in df_pf.columns else "N/A"
-                    peor_mop_total = df_pf["PEOR_MOP TOTAL"].iloc[0] if "PEOR_MOP TOTAL" in df_pf.columns else None
-                    monto_total = df_pf["Monto Total"].iloc[0] if "Monto Total" in df_pf.columns else 0
-                    total_cuentas = len(df_pf)
+                # =====================================================
+                # 2️⃣ RFCs agregados manualmente
+                # =====================================================
+                rfcs_extra = st.session_state.rfcs_extra_pm
+                labels_extra = [f"➕ Manual ({r})" for r in rfcs_extra]
 
-                    c1, c2, c3, c4 = st.columns(4)
+                # =====================================================
+                # 3️⃣ Construir tabs dinámicos
+                # =====================================================
+                tabs_labels = labels_base + labels_extra + ["➕"]
 
-                    with c1:
-                        st.metric("Fecha consulta", fecha_consulta)
-                    with c2:
-                        st.metric("Total cuentas", total_cuentas)
-                    with c3:
+                tabs_dinamicos_buro = st.tabs(tabs_labels)
+
+                # =====================================================
+                # 4️⃣ Renderizar accionistas automáticos
+                # =====================================================
+                for i, rfc_accionista in enumerate(rfcs_base):
+
+                    with tabs_dinamicos_buro[i]:
+
                         try:
-                            st.metric("Monto total", _money(monto_total))
-                        except:
-                            st.metric("Monto total", str(monto_total))
-                    with c4:
-                        st.metric("Peor MOP", peor_mop_total)
+                            df_pf = obtener_buro_moffin_por_rfc(rfc_accionista)
+                        except Exception:
+                            st.warning("No se pudo consultar el buró del accionista.")
+                            continue
 
-                    st.markdown("---")
+                        if df_pf is None or df_pf.empty:
+                            st.info("Sin información de buró.")
+                            continue
 
-                    # ---------------- DONUTS ----------------
-                    col_tipo, col_mop = st.columns(2)
+                        # ---------------- HEADER PF ----------------
+                        fecha_consulta = df_pf["Fecha Consulta"].iloc[0] if "Fecha Consulta" in df_pf.columns else "N/A"
+                        peor_mop_total = df_pf["PEOR_MOP TOTAL"].iloc[0] if "PEOR_MOP TOTAL" in df_pf.columns else None
+                        monto_total = df_pf["Monto Total"].iloc[0] if "Monto Total" in df_pf.columns else 0
+                        total_cuentas = len(df_pf)
 
-                    with col_tipo:
-                        with st.container(border=True):
-                            st.markdown("### 📊 Distribución por tipo de contrato")
+                        c1, c2, c3, c4 = st.columns(4)
 
-                            if "Tipo de contrato" in df_pf.columns:
-                                df_tipo = (
-                                    df_pf
-                                    .groupby("Tipo de contrato")
-                                    .size()
-                                    .reset_index(name="_total_num")
-                                )
-                                df_tipo["name"] = df_tipo["Tipo de contrato"].astype(str)
+                        with c1:
+                            st.metric("Fecha consulta", fecha_consulta)
+                        with c2:
+                            st.metric("Total cuentas", total_cuentas)
+                        with c3:
+                            try:
+                                st.metric("Monto total", _money(monto_total))
+                            except:
+                                st.metric("Monto total", str(monto_total))
+                        with c4:
+                            st.metric("Peor MOP", peor_mop_total)
 
-                                _render_donut(
-                                    df_tipo,
-                                    title="Distribución",
-                                    value_col="_total_num",
-                                    label_col="name"
-                                )
-                                df_tipo["Participación %"] = (df_tipo["_total_num"] / df_tipo["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
-                                st.dataframe(
-                                    df_tipo.rename(columns={"Tipo de contrato": "Tipo", "_total_num": "# Cuentas"})[["Tipo", "# Cuentas", "Participación %"]],
-                                    use_container_width=True,
-                                    hide_index=True
-                                )
+                        st.markdown("---")
 
-                    with col_mop:
-                        with st.container(border=True):
-                            st.markdown("### 🚨 Distribución por severidad (Peor MOP)")
+                        # ---------------- DONUTS ----------------
+                        col_tipo, col_mop = st.columns(2)
 
-                            if "peor_mop" in df_pf.columns:
-                                df_mop = (
-                                    df_pf
-                                    .groupby("peor_mop", dropna=False)
-                                    .size()
-                                    .reset_index(name="_total_num")
-                                )
-                                df_mop["name"] = df_mop["peor_mop"].fillna("Sin historial").astype(str)
+                        with col_tipo:
+                            with st.container(border=True):
+                                st.markdown("### 📊 Distribución por tipo de contrato")
 
-                                _render_donut(
-                                    df_mop,
-                                    title="Distribución",
-                                    value_col="_total_num",
-                                    label_col="name"
-                                )
-                                df_mop["Participación %"] = (df_mop["_total_num"] / df_mop["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
-                                st.dataframe(
-                                    df_mop.rename(columns={"name": "Peor MOP", "_total_num": "# Cuentas"})[["Peor MOP", "# Cuentas", "Participación %"]],
-                                    use_container_width=True,
-                                    hide_index=True
-                                )
+                                if "Tipo de contrato" in df_pf.columns:
+                                    df_tipo = (
+                                        df_pf
+                                        .groupby("Tipo de contrato")
+                                        .size()
+                                        .reset_index(name="_total_num")
+                                    )
+                                    df_tipo["name"] = df_tipo["Tipo de contrato"].astype(str)
+
+                                    _render_donut(
+                                        df_tipo,
+                                        title="Distribución",
+                                        value_col="_total_num",
+                                        label_col="name"
+                                    )
+                                    df_tipo["Participación %"] = (df_tipo["_total_num"] / df_tipo["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
+                                    st.dataframe(
+                                        df_tipo.rename(columns={"Tipo de contrato": "Tipo", "_total_num": "# Cuentas"})[["Tipo", "# Cuentas", "Participación %"]],
+                                        use_container_width=True,
+                                        hide_index=True
+                                    )
+
+                        with col_mop:
+                            with st.container(border=True):
+                                st.markdown("### 🚨 Distribución por severidad (Peor MOP)")
+
+                                if "peor_mop" in df_pf.columns:
+                                    df_mop = (
+                                        df_pf
+                                        .groupby("peor_mop", dropna=False)
+                                        .size()
+                                        .reset_index(name="_total_num")
+                                    )
+                                    df_mop["name"] = df_mop["peor_mop"].fillna("Sin historial").astype(str)
+
+                                    _render_donut(
+                                        df_mop,
+                                        title="Distribución",
+                                        value_col="_total_num",
+                                        label_col="name"
+                                    )
+                                    df_mop["Participación %"] = (df_mop["_total_num"] / df_mop["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
+                                    st.dataframe(
+                                        df_mop.rename(columns={"name": "Peor MOP", "_total_num": "# Cuentas"})[["Peor MOP", "# Cuentas", "Participación %"]],
+                                        use_container_width=True,
+                                        hide_index=True
+                                    )
 
 
-                    st.markdown("---")
+                        st.markdown("---")
 
-                    # ---------------- DETALLE ----------------
-                    st.markdown("### 📄 Detalle de cuentas")
+                        # ---------------- DETALLE ----------------
+                        st.markdown("### 📄 Detalle de cuentas")
 
-                    columnas_constantes = [
-                        "Monto Total",
-                        "Monto Máx",
-                        "PEOR_MOP TOTAL",
-                        "MontoTotalPagar",
-                        "Personal",
-                        "Tarjeta de Crédito",
-                        "Hipotecario",
-                        "Línea de Crédito",
-                        "Automotriz",
-                        "Arrendamiento",
-                    ]
+                        columnas_constantes = [
+                            "Monto Total",
+                            "Monto Máx",
+                            "PEOR_MOP TOTAL",
+                            "MontoTotalPagar",
+                            "Personal",
+                            "Tarjeta de Crédito",
+                            "Hipotecario",
+                            "Línea de Crédito",
+                            "Automotriz",
+                            "Arrendamiento",
+                        ]
 
-                    df_detalle = df_pf.drop(columns=columnas_constantes, errors="ignore")
+                        df_detalle = df_pf.drop(columns=columnas_constantes, errors="ignore")
 
-                    st.dataframe(df_detalle, use_container_width=True, hide_index=True)
+                        st.dataframe(df_detalle, use_container_width=True, hide_index=True)
 
-            # =====================================================
-            # 5️⃣ Renderizar RFCs manuales
-            # =====================================================
-            offset = len(rfcs_base)
+                # =====================================================
+                # 5️⃣ Renderizar RFCs manuales
+                # =====================================================
+                offset = len(rfcs_base)
 
-            for j, rfc_manual in enumerate(rfcs_extra):
+                for j, rfc_manual in enumerate(rfcs_extra):
 
-                with tabs_dinamicos_buro[offset + j]:
+                    with tabs_dinamicos_buro[offset + j]:
 
-                    try:
-                        df_pf = obtener_buro_moffin_por_rfc(rfc_manual)
-                    except Exception:
-                        st.warning("No se pudo consultar el buró.")
-                        continue
-
-                    if df_pf is None or df_pf.empty:
-                        st.info("Sin información.")
-                        continue
-
-                    # ---------------- HEADER PF ----------------
-                    fecha_consulta = df_pf["Fecha Consulta"].iloc[0] if "Fecha Consulta" in df_pf.columns else "N/A"
-                    peor_mop_total = df_pf["PEOR_MOP TOTAL"].iloc[0] if "PEOR_MOP TOTAL" in df_pf.columns else None
-                    monto_total = df_pf["Monto Total"].iloc[0] if "Monto Total" in df_pf.columns else 0
-                    total_cuentas = len(df_pf)
-
-                    c1, c2, c3, c4 = st.columns(4)
-
-                    with c1:
-                        st.metric("Fecha consulta", fecha_consulta)
-                    with c2:
-                        st.metric("Total cuentas", total_cuentas)
-                    with c3:
                         try:
-                            st.metric("Monto total", _money(monto_total))
-                        except:
-                            st.metric("Monto total", str(monto_total))
-                    with c4:
-                        st.metric("Peor MOP", peor_mop_total)
+                            df_pf = obtener_buro_moffin_por_rfc(rfc_manual)
+                        except Exception:
+                            st.warning("No se pudo consultar el buró.")
+                            continue
 
-                    st.markdown("---")
+                        if df_pf is None or df_pf.empty:
+                            st.info("Sin información.")
+                            continue
 
-                    # ---------------- DONUTS ----------------
-                    col_tipo, col_mop = st.columns(2)
+                        # ---------------- HEADER PF ----------------
+                        fecha_consulta = df_pf["Fecha Consulta"].iloc[0] if "Fecha Consulta" in df_pf.columns else "N/A"
+                        peor_mop_total = df_pf["PEOR_MOP TOTAL"].iloc[0] if "PEOR_MOP TOTAL" in df_pf.columns else None
+                        monto_total = df_pf["Monto Total"].iloc[0] if "Monto Total" in df_pf.columns else 0
+                        total_cuentas = len(df_pf)
 
-                    with col_tipo:
-                        with st.container(border=True):
-                            st.markdown("### 📊 Distribución por tipo de contrato")
+                        c1, c2, c3, c4 = st.columns(4)
 
-                            if "Tipo de contrato" in df_pf.columns:
-                                df_tipo = (
-                                    df_pf
-                                    .groupby("Tipo de contrato")
-                                    .size()
-                                    .reset_index(name="_total_num")
-                                )
-                                df_tipo["name"] = df_tipo["Tipo de contrato"].astype(str)
+                        with c1:
+                            st.metric("Fecha consulta", fecha_consulta)
+                        with c2:
+                            st.metric("Total cuentas", total_cuentas)
+                        with c3:
+                            try:
+                                st.metric("Monto total", _money(monto_total))
+                            except:
+                                st.metric("Monto total", str(monto_total))
+                        with c4:
+                            st.metric("Peor MOP", peor_mop_total)
 
-                                _render_donut(
-                                    df_tipo,
-                                    title="Distribución",
-                                    value_col="_total_num",
-                                    label_col="name"
-                                )
-                                df_tipo["Participación %"] = (df_tipo["_total_num"] / df_tipo["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
-                                st.dataframe(
-                                    df_tipo.rename(columns={"Tipo de contrato": "Tipo", "_total_num": "# Cuentas"})[["Tipo", "# Cuentas", "Participación %"]],
-                                    use_container_width=True,
-                                    hide_index=True
-                                )
+                        st.markdown("---")
 
-                    with col_mop:
-                        with st.container(border=True):
-                            st.markdown("### 🚨 Distribución por severidad (Peor MOP)")
+                        # ---------------- DONUTS ----------------
+                        col_tipo, col_mop = st.columns(2)
 
-                            if "peor_mop" in df_pf.columns:
-                                df_mop = (
-                                    df_pf
-                                    .groupby("peor_mop", dropna=False)
-                                    .size()
-                                    .reset_index(name="_total_num")
-                                )
-                                df_mop["name"] = df_mop["peor_mop"].fillna("Sin historial").astype(str)
+                        with col_tipo:
+                            with st.container(border=True):
+                                st.markdown("### 📊 Distribución por tipo de contrato")
 
-                                _render_donut(
-                                    df_mop,
-                                    title="Distribución",
-                                    value_col="_total_num",
-                                    label_col="name"
-                                )
-                                df_mop["Participación %"] = (df_mop["_total_num"] / df_mop["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
-                                st.dataframe(
-                                    df_mop.rename(columns={"name": "Peor MOP", "_total_num": "# Cuentas"})[["Peor MOP", "# Cuentas", "Participación %"]],
-                                    use_container_width=True,
-                                    hide_index=True
-                                )
+                                if "Tipo de contrato" in df_pf.columns:
+                                    df_tipo = (
+                                        df_pf
+                                        .groupby("Tipo de contrato")
+                                        .size()
+                                        .reset_index(name="_total_num")
+                                    )
+                                    df_tipo["name"] = df_tipo["Tipo de contrato"].astype(str)
+
+                                    _render_donut(
+                                        df_tipo,
+                                        title="Distribución",
+                                        value_col="_total_num",
+                                        label_col="name"
+                                    )
+                                    df_tipo["Participación %"] = (df_tipo["_total_num"] / df_tipo["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
+                                    st.dataframe(
+                                        df_tipo.rename(columns={"Tipo de contrato": "Tipo", "_total_num": "# Cuentas"})[["Tipo", "# Cuentas", "Participación %"]],
+                                        use_container_width=True,
+                                        hide_index=True
+                                    )
+
+                        with col_mop:
+                            with st.container(border=True):
+                                st.markdown("### 🚨 Distribución por severidad (Peor MOP)")
+
+                                if "peor_mop" in df_pf.columns:
+                                    df_mop = (
+                                        df_pf
+                                        .groupby("peor_mop", dropna=False)
+                                        .size()
+                                        .reset_index(name="_total_num")
+                                    )
+                                    df_mop["name"] = df_mop["peor_mop"].fillna("Sin historial").astype(str)
+
+                                    _render_donut(
+                                        df_mop,
+                                        title="Distribución",
+                                        value_col="_total_num",
+                                        label_col="name"
+                                    )
+                                    df_mop["Participación %"] = (df_mop["_total_num"] / df_mop["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
+                                    st.dataframe(
+                                        df_mop.rename(columns={"name": "Peor MOP", "_total_num": "# Cuentas"})[["Peor MOP", "# Cuentas", "Participación %"]],
+                                        use_container_width=True,
+                                        hide_index=True
+                                    )
 
 
-                    st.markdown("---")
+                        st.markdown("---")
 
-                    # ---------------- DETALLE ----------------
-                    st.markdown("### 📄 Detalle de cuentas")
+                        # ---------------- DETALLE ----------------
+                        st.markdown("### 📄 Detalle de cuentas")
 
-                    columnas_constantes = [
-                        "Monto Total",
-                        "Monto Máx",
-                        "PEOR_MOP TOTAL",
-                        "MontoTotalPagar",
-                        "Personal",
-                        "Tarjeta de Crédito",
-                        "Hipotecario",
-                        "Línea de Crédito",
-                        "Automotriz",
-                        "Arrendamiento",
-                    ]
+                        columnas_constantes = [
+                            "Monto Total",
+                            "Monto Máx",
+                            "PEOR_MOP TOTAL",
+                            "MontoTotalPagar",
+                            "Personal",
+                            "Tarjeta de Crédito",
+                            "Hipotecario",
+                            "Línea de Crédito",
+                            "Automotriz",
+                            "Arrendamiento",
+                        ]
 
-                    df_detalle = df_pf.drop(columns=columnas_constantes, errors="ignore")
+                        df_detalle = df_pf.drop(columns=columnas_constantes, errors="ignore")
 
-                    st.dataframe(df_detalle, use_container_width=True, hide_index=True)
+                        st.dataframe(df_detalle, use_container_width=True, hide_index=True)
 
-            # =====================================================
-            # 6️⃣ TAB "+"
-            # =====================================================
-            with tabs_dinamicos_buro[-1]:
+                # =====================================================
+                # 6️⃣ TAB "+"
+                # =====================================================
+                with tabs_dinamicos_buro[-1]:
 
-                st.markdown("### ➕ Agregar RFC manual")
+                    st.markdown("### ➕ Agregar RFC manual")
 
-                nuevo_rfc = st.text_input("Ingresa RFC del accionista")
+                    nuevo_rfc = st.text_input("Ingresa RFC del accionista")
 
-                if st.button("Agregar RFC"):
+                    if st.button("Agregar RFC"):
 
-                    nuevo_rfc = nuevo_rfc.strip().upper()
+                        nuevo_rfc = nuevo_rfc.strip().upper()
 
-                    if len(nuevo_rfc) == 13:
+                        if len(nuevo_rfc) == 13:
 
-                        if nuevo_rfc not in st.session_state.rfcs_extra_pm:
-                            st.session_state.rfcs_extra_pm.append(nuevo_rfc)
-                            st.success("RFC agregado correctamente.")
-                            st.rerun()
+                            if nuevo_rfc not in st.session_state.rfcs_extra_pm:
+                                st.session_state.rfcs_extra_pm.append(nuevo_rfc)
+                                st.success("RFC agregado correctamente.")
+                                st.rerun()
+                            else:
+                                st.warning("Ese RFC ya fue agregado.")
+
                         else:
-                            st.warning("Ese RFC ya fue agregado.")
-
-                    else:
-                        st.error("RFC inválido. Debe tener 13 caracteres (Persona Física).")
+                            st.error("RFC inválido. Debe tener 13 caracteres (Persona Física).")
 
 
-    # =====================================================
-    # ==================== PERSONA FISICA =================
-    # =====================================================
-    elif es_pf:
+        # =====================================================
+        # ==================== PERSONA FISICA =================
+        # =====================================================
+        elif es_pf:
 
-        fecha_consulta = df_buro["Fecha Consulta"].iloc[0] if "Fecha Consulta" in df_buro.columns else "N/A"
+            fecha_consulta = df_buro["Fecha Consulta"].iloc[0] if "Fecha Consulta" in df_buro.columns else "N/A"
 
-        peor_mop_total = df_buro["PEOR_MOP TOTAL"].iloc[0] if "PEOR_MOP TOTAL" in df_buro.columns else None
-        monto_total = df_buro["Monto Total"].iloc[0] if "Monto Total" in df_buro.columns else 0
-        monto_max = df_buro["Monto Máx"].iloc[0] if "Monto Máx" in df_buro.columns else 0
-        total_cuentas = len(df_buro)
+            peor_mop_total = df_buro["PEOR_MOP TOTAL"].iloc[0] if "PEOR_MOP TOTAL" in df_buro.columns else None
+            monto_total = df_buro["Monto Total"].iloc[0] if "Monto Total" in df_buro.columns else 0
+            monto_max = df_buro["Monto Máx"].iloc[0] if "Monto Máx" in df_buro.columns else 0
+            total_cuentas = len(df_buro)
 
-        # -------- BANDA 1 --------
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Fecha consulta", fecha_consulta)
-        with col2:
-            st.metric("Total cuentas", total_cuentas)
-        with col3:
-            try:
-                st.metric("Monto total", _money(monto_total))
-            except Exception:
-                st.metric("Monto total", str(monto_total))
-        with col4:
-            st.metric("Peor MOP histórico", peor_mop_total)
+            # -------- BANDA 1 --------
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Fecha consulta", fecha_consulta)
+            with col2:
+                st.metric("Total cuentas", total_cuentas)
+            with col3:
+                try:
+                    st.metric("Monto total", _money(monto_total))
+                except Exception:
+                    st.metric("Monto total", str(monto_total))
+            with col4:
+                st.metric("Peor MOP histórico", peor_mop_total)
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # -------- BANDA 1.5 (CONSTANTES) --------
-        columnas_constantes_pf = [
-            "Monto Total",
-            "Monto Máx",
-            "PEOR_MOP TOTAL",
-            "MontoTotalPagar",
-            "Personal",
-            "Tarjeta de Crédito",
-            "Hipotecario",
-            "Línea de Crédito",
-            "Automotriz",
-            "Arrendamiento",
-        ]
-        presentes_pf = [c for c in columnas_constantes_pf if c in df_buro.columns]
-        if len(presentes_pf) > 0:
-            with st.container(border=True):
-                st.markdown("### 💼 Resumen financiero consolidado")
+            # -------- BANDA 1.5 (CONSTANTES) --------
+            columnas_constantes_pf = [
+                "Monto Total",
+                "Monto Máx",
+                "PEOR_MOP TOTAL",
+                "MontoTotalPagar",
+                "Personal",
+                "Tarjeta de Crédito",
+                "Hipotecario",
+                "Línea de Crédito",
+                "Automotriz",
+                "Arrendamiento",
+            ]
+            presentes_pf = [c for c in columnas_constantes_pf if c in df_buro.columns]
+            if len(presentes_pf) > 0:
+                with st.container(border=True):
+                    st.markdown("### 💼 Resumen financiero consolidado")
 
-                fila = df_buro.iloc[0]
-                df_resumen_fin = pd.DataFrame({
-                    "Métrica": presentes_pf,
-                    "Valor": [fila.get(c, 0) for c in presentes_pf]
-                })
+                    fila = df_buro.iloc[0]
+                    df_resumen_fin = pd.DataFrame({
+                        "Métrica": presentes_pf,
+                        "Valor": [fila.get(c, 0) for c in presentes_pf]
+                    })
 
-                def _fmt_money_pf(v):
-                    if v is None:
-                        return "$0.00"
-                    if isinstance(v, str) and "$" in v:
-                        return v
-                    try:
-                        return _money(v)
-                    except Exception:
-                        return str(v)
+                    def _fmt_money_pf(v):
+                        if v is None:
+                            return "$0.00"
+                        if isinstance(v, str) and "$" in v:
+                            return v
+                        try:
+                            return _money(v)
+                        except Exception:
+                            return str(v)
 
-                df_resumen_fin["Valor"] = df_resumen_fin["Valor"].apply(_fmt_money_pf)
-                st.dataframe(df_resumen_fin, use_container_width=True, hide_index=True)
+                    df_resumen_fin["Valor"] = df_resumen_fin["Valor"].apply(_fmt_money_pf)
+                    st.dataframe(df_resumen_fin, use_container_width=True, hide_index=True)
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # -------- BANDA 2 --------
-        col_tipo, col_mop = st.columns(2)
+            # -------- BANDA 2 --------
+            col_tipo, col_mop = st.columns(2)
 
-        with col_tipo:
-            with st.container(border=True):
-                st.markdown("### 📊 Distribución por tipo de contrato")
+            with col_tipo:
+                with st.container(border=True):
+                    st.markdown("### 📊 Distribución por tipo de contrato")
 
-                if "Tipo de contrato" in df_buro.columns:
-                    df_tipo = (
-                        df_buro
-                        .groupby("Tipo de contrato")
-                        .size()
-                        .reset_index(name="_total_num")
-                    )
-                    df_tipo["name"] = df_tipo["Tipo de contrato"].astype(str)
+                    if "Tipo de contrato" in df_buro.columns:
+                        df_tipo = (
+                            df_buro
+                            .groupby("Tipo de contrato")
+                            .size()
+                            .reset_index(name="_total_num")
+                        )
+                        df_tipo["name"] = df_tipo["Tipo de contrato"].astype(str)
 
-                    _render_donut(df_tipo, title="Distribución", value_col="_total_num", label_col="name")
+                        _render_donut(df_tipo, title="Distribución", value_col="_total_num", label_col="name")
 
-                    df_tipo["Participación %"] = (df_tipo["_total_num"] / df_tipo["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
-                    st.dataframe(
-                        df_tipo.rename(columns={"Tipo de contrato": "Tipo", "_total_num": "# Cuentas"})[["Tipo", "# Cuentas", "Participación %"]],
-                        use_container_width=True,
-                        hide_index=True
-                    )
+                        df_tipo["Participación %"] = (df_tipo["_total_num"] / df_tipo["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
+                        st.dataframe(
+                            df_tipo.rename(columns={"Tipo de contrato": "Tipo", "_total_num": "# Cuentas"})[["Tipo", "# Cuentas", "Participación %"]],
+                            use_container_width=True,
+                            hide_index=True
+                        )
 
-        with col_mop:
-            with st.container(border=True):
-                st.markdown("### 🚨 Distribución por severidad (Peor MOP)")
+            with col_mop:
+                with st.container(border=True):
+                    st.markdown("### 🚨 Distribución por severidad (Peor MOP)")
 
-                if "peor_mop" in df_buro.columns:
-                    df_mop = (
-                        df_buro
-                        .groupby("peor_mop", dropna=False)
-                        .size()
-                        .reset_index(name="_total_num")
-                    )
-                    df_mop["name"] = df_mop["peor_mop"].fillna("Sin historial").astype(str)
+                    if "peor_mop" in df_buro.columns:
+                        df_mop = (
+                            df_buro
+                            .groupby("peor_mop", dropna=False)
+                            .size()
+                            .reset_index(name="_total_num")
+                        )
+                        df_mop["name"] = df_mop["peor_mop"].fillna("Sin historial").astype(str)
 
-                    _render_donut(df_mop, title="Distribución", value_col="_total_num", label_col="name")
+                        _render_donut(df_mop, title="Distribución", value_col="_total_num", label_col="name")
 
-                    df_mop["Participación %"] = (df_mop["_total_num"] / df_mop["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
-                    st.dataframe(
-                        df_mop.rename(columns={"name": "Peor MOP", "_total_num": "# Cuentas"})[["Peor MOP", "# Cuentas", "Participación %"]],
-                        use_container_width=True,
-                        hide_index=True
-                    )
+                        df_mop["Participación %"] = (df_mop["_total_num"] / df_mop["_total_num"].sum()).apply(lambda x: f"{x:.1%}")
+                        st.dataframe(
+                            df_mop.rename(columns={"name": "Peor MOP", "_total_num": "# Cuentas"})[["Peor MOP", "# Cuentas", "Participación %"]],
+                            use_container_width=True,
+                            hide_index=True
+                        )
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # -------- BANDA 3 (DETALLE) --------
-        st.markdown("### 📄 Detalle de cuentas")
+            # -------- BANDA 3 (DETALLE) --------
+            st.markdown("### 📄 Detalle de cuentas")
 
-        # no mostrar constantes en detalle
-        df_detalle = df_buro.drop(columns=columnas_constantes_pf, errors="ignore")
+            # no mostrar constantes en detalle
+            df_detalle = df_buro.drop(columns=columnas_constantes_pf, errors="ignore")
 
-        st.dataframe(df_detalle, use_container_width=True, hide_index=True)
+            st.dataframe(df_detalle, use_container_width=True, hide_index=True)
 
 
 # =============================================================================
 # TAB 2: FACTURAS (Moved from pages/facturas.py)
 # =============================================================================
 with tabs[2]:
+    # ✅ PDF Download Button at the top of Facturas
+    render_pdf_download_button()
+    
     st.subheader("Facturas (CFDI)")
     st.caption("Vista de facturas listadas por Syntage (emitidas y recibidas)")
 
@@ -3466,7 +3466,8 @@ with tabs[2]:
                 cfdi_data_fact = None
 
     if not cfdi_data_fact:
-        st.info("Carga un RFC y rango, o primero presiona **Calcular** arriba para reutilizar el cache.")
+        # ✅ Added the standard "No hay información disponible." text before the prompt to calculate
+        st.info("No hay información disponible. Carga un RFC y rango, o primero presiona **Calcular** arriba para reutilizar el cache.")
     else:
         emit_df = cfdi_data_fact.get("emit_invoices_df", pd.DataFrame())
         rec_df = cfdi_data_fact.get("rec_invoices_df", pd.DataFrame())
