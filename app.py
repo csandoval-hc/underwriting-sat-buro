@@ -1066,7 +1066,7 @@ def _reset_range_cb() -> None:
 def _anchor_end_from_headers(h_ing: pd.DataFrame | None, h_egr: pd.DataFrame | None) -> pd.Timestamp:
     """
     Devuelve the 'end' exclusivo (primer día del mes siguiente) basado en la fecha más reciente
-    disponible en los headers (emitidos/recibidos). Si no hay fechas válidas, cae a hoy.
+     disponible en los headers (emitidos/recibidos). Si no hay fechas válidas, cae a hoy.
     """
     dts = []
 
@@ -1837,7 +1837,7 @@ st.markdown('<div class="uw-topbar-spacer"></div>', unsafe_allow_html=True)
 # =============================================================================
 # Tabs
 # =============================================================================
-tabs = st.tabs(["SAT", "Buró"])
+tabs = st.tabs(["SAT", "Buró", "Facturas"])
 
 if run:
     if not rfc_valid:
@@ -2175,18 +2175,18 @@ with tabs[0]:
             # Top 10 Clientes / Proveedores (Syntage)
             # =============================================================================
             # Respeta filtro Desde/Hasta del usuario (si existe)
-            d_from = st.session_state.get("cfdi_date_from_value") or st.session_state.get("cfdi_date_from")
-            d_to = st.session_state.get("cfdi_date_to_value") or st.session_state.get("cfdi_date_to")
+            d_from_conc = st.session_state.get("cfdi_date_from_value") or st.session_state.get("cfdi_date_from")
+            d_to_conc = st.session_state.get("cfdi_date_to_value") or st.session_state.get("cfdi_date_to")
 
             # fallback por si algo viene vacío
-            if d_from is None:
-                d_from = date.today() - timedelta(days=365)
-            if d_to is None:
-                d_to = date.today()
+            if d_from_conc is None:
+                d_from_conc = date.today() - timedelta(days=365)
+            if d_to_conc is None:
+                d_to_conc = date.today()
 
             # ISO UTC (incluye día completo)
-            from_dt = pd.Timestamp(d_from).strftime("%Y-%m-%d")
-            to_dt = pd.Timestamp(d_to).strftime("%Y-%m-%d")
+            from_dt = pd.Timestamp(d_from_conc).strftime("%Y-%m-%d")
+            to_dt = pd.Timestamp(d_to_conc).strftime("%Y-%m-%d")
 
 
             rfc_for_conc = st.session_state.get("last_rfc") or rfc
@@ -3006,14 +3006,14 @@ with tabs[1]:
             # =====================================================
             tabs_labels = labels_base + labels_extra + ["➕"]
 
-            tabs_dinamicos = st.tabs(tabs_labels)
+            tabs_dinamicos_buro = st.tabs(tabs_labels)
 
             # =====================================================
             # 4️⃣ Renderizar accionistas automáticos
             # =====================================================
             for i, rfc_accionista in enumerate(rfcs_base):
 
-                with tabs_dinamicos[i]:
+                with tabs_dinamicos_buro[i]:
 
                     try:
                         df_pf = obtener_buro_moffin_por_rfc(rfc_accionista)
@@ -3132,7 +3132,7 @@ with tabs[1]:
 
             for j, rfc_manual in enumerate(rfcs_extra):
 
-                with tabs_dinamicos[offset + j]:
+                with tabs_dinamicos_buro[offset + j]:
 
                     try:
                         df_pf = obtener_buro_moffin_por_rfc(rfc_manual)
@@ -3247,7 +3247,7 @@ with tabs[1]:
             # =====================================================
             # 6️⃣ TAB "+"
             # =====================================================
-            with tabs_dinamicos[-1]:
+            with tabs_dinamicos_buro[-1]:
 
                 st.markdown("### ➕ Agregar RFC manual")
 
@@ -3393,3 +3393,113 @@ with tabs[1]:
         df_detalle = df_buro.drop(columns=columnas_constantes_pf, errors="ignore")
 
         st.dataframe(df_detalle, use_container_width=True, hide_index=True)
+
+
+# =============================================================================
+# TAB 2: FACTURAS (Moved from pages/facturas.py)
+# =============================================================================
+with tabs[2]:
+    st.subheader("Facturas (CFDI)")
+    st.caption("Vista de facturas listadas por Syntage (emitidas y recibidas)")
+
+    # Facturas Logic Helpers
+    def _render_facturas_df(df: pd.DataFrame, *, key: str, money_cols: list[str] | None = None) -> None:
+        if df is None or df.empty:
+            st.info("Sin datos para el periodo.")
+            return
+
+        d = df.copy()
+        d = d.replace([np.inf, -np.inf], np.nan)
+
+        money_cols = money_cols or []
+        for c in money_cols:
+            if c in d.columns:
+                d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0).round(0)
+
+        d = _st_safe_df(d)
+
+        sty = d.style
+        if money_cols:
+            fmt = {c: "${:,.0f}" for c in money_cols if c in d.columns}
+            if fmt:
+                sty = sty.format(fmt)
+
+        st.dataframe(sty, use_container_width=True, hide_index=True)
+
+    # UI Content
+    cfdi_data_fact = st.session_state.get("cfdi_data")
+    last_rfc_fact = st.session_state.get("last_rfc")
+
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns([2.2, 1.3, 1.3, 1.2])
+
+        with c1:
+            rfc_in_fact = st.text_input("RFC (Facturas)", value=last_rfc_fact or "", placeholder="PEIC211118IS0", key="facturas_rfc_tab")
+            rfc_fact = _clean_rfc(rfc_in_fact)
+
+        with c2:
+            d_from_fact = st.date_input(
+                "Desde (Facturas)",
+                value=st.session_state.get("cfdi_date_from") or (date.today().replace(day=1)),
+                key="facturas_from_tab",
+            )
+
+        with c3:
+            d_to_fact = st.date_input(
+                "Hasta (Facturas)",
+                value=st.session_state.get("cfdi_date_to") or (date.today()),
+                key="facturas_to_tab",
+            )
+
+        with c4:
+            run_fact = st.button("Cargar Facturas", type="primary", use_container_width=True, disabled=not (12 <= len(rfc_fact) <= 13))
+
+    if run_fact:
+        with st.spinner("Consultando facturas en Syntage…"):
+            local_dir_fact = str(ROOT / "data" / "cfdi_xml")
+            try:
+                cfdi_data_fact = fetch_cfdi(rfc=rfc_fact, source="syntage", date_from=d_from_fact, date_to=d_to_fact, local_dir=local_dir_fact)
+                st.session_state["cfdi_data"] = cfdi_data_fact
+                st.session_state["last_rfc"] = rfc_fact
+            except Exception as e:
+                st.error(f"Error consultando facturas: {e}")
+                cfdi_data_fact = None
+
+    if not cfdi_data_fact:
+        st.info("Carga un RFC y rango, o primero presiona **Calcular** arriba para reutilizar el cache.")
+    else:
+        emit_df = cfdi_data_fact.get("emit_invoices_df", pd.DataFrame())
+        rec_df = cfdi_data_fact.get("rec_invoices_df", pd.DataFrame())
+
+        meta_fact = cfdi_data_fact.get("meta") or {}
+        if meta_fact:
+            st.caption(
+                f"meta: emit_listed={meta_fact.get('emit_listed')} downloaded={meta_fact.get('emit_downloaded')} failed={meta_fact.get('emit_failed')} | "
+                f"rec_listed={meta_fact.get('rec_listed')} downloaded={meta_fact.get('rec_downloaded')} failed={meta_fact.get('rec_failed')}"
+            )
+
+        fact_subtabs = st.tabs(["Emitidas", "Recibidas"])
+
+        with fact_subtabs[0]:
+            st.subheader("Facturas emitidas")
+            _render_facturas_df(
+                emit_df,
+                key="facturas_emit_tab",
+                money_cols=[c for c in ["subtotal", "total", "monto", "amount", "importe"] if c in emit_df.columns],
+            )
+            if emit_df is not None and not emit_df.empty:
+                csv_emit = emit_df.to_csv(index=False).encode("utf-8")
+                st.download_button("Descargar CSV (emitidas)", data=csv_emit, file_name="facturas_emitidas.csv", mime="text/csv")
+
+        with fact_subtabs[1]:
+            st.subheader("Facturas recibidas")
+            _render_facturas_df(
+                rec_df,
+                key="facturas_rec_tab",
+                money_cols=[c for c in ["subtotal", "total", "monto", "amount", "importe"] if c in rec_df.columns],
+            )
+            if rec_df is not None and not rec_df.empty:
+                csv_rec = rec_df.to_csv(index=False).encode("utf-8")
+                st.download_button("Descargar CSV (recibidas)", data=csv_rec, file_name="facturas_recibidas.csv", mime="text/csv")
+
+# =============================================================================
