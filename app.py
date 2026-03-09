@@ -2897,7 +2897,7 @@ with tabs[1]:
 
                         st.dataframe(df_show, use_container_width=True, hide_index=True)
                     else:
-                        st.info("No se encontró 'peor_mop' en el buró.")
+                        st.info("No se encontró 'peor_mop' en the buró.")
 
             st.markdown("---")
 
