@@ -46,7 +46,6 @@ from underwriting.infrastructure.syntage_client import SyntageClient
 from underwriting.application.sat_service import SatService
 from underwriting.application.cfdi_service import CfdiService
 from underwriting.ui.sat_views import render_tax_status_cards
-from underwriting.ui.cfdi_views import render_prodserv_dual_cards
 from types import SimpleNamespace
 from underwriting.application.buro_service import obtener_buro_moffin_por_rfc
 from underwriting.application.cap_table_service import CapTableService
@@ -1596,6 +1595,7 @@ def _period_sum_ingresos(headers_emit: pd.DataFrame | None, rfc: str, start: pd.
     m = (H["dt"] >= start) & (H["dt"] < end)
     base_pos = _or0(H.loc[m & (H["emisor_rfc"] == r) & (H["tipo"] == "I"), "total"].sum())
     base_neg = _or0(H.loc[m & (H["emisor_rfc"] == r) & (H["tipo"] == "E"), "total"].sum())
+    # [CHANGE] Ingresos NO restan nómina (tipo N). Solo I emitidos - E emitidos.
     return base_pos - base_neg
 
 
@@ -1893,11 +1893,9 @@ with tabs[0]:
     else:
         st.caption("📦 Fecha de última extracción: no disponible")
 
-
     tax_status = st.session_state.get("tax_status")
+    
     if tax_status:
-        render_tax_status_cards(tax_status)
-
         cfdi_data = st.session_state.get("cfdi_data") or {}
         meta = cfdi_data.get("meta") or {}
         if meta:
@@ -1910,7 +1908,11 @@ with tabs[0]:
 
         if not cfdi_data:
             st.info("Para ver Prod/Serv, selecciona fuente/rango arriba y presiona Calcular.")
+            render_tax_status_cards(tax_status)
         else:
+            # =============================================================================
+            # PREPARE DATA FOR SESSION STATE (Upgraded logic for sat_views)
+            # =============================================================================
             catalogo = load_ps_catalog()
             service = get_cfdi_service()
 
@@ -1945,16 +1947,10 @@ with tabs[0]:
                 else pd.DataFrame()
             )
 
-            render_prodserv_dual_cards(
-                title_left="Ingresos facturados",
-                df_left=resumen_ing,
-                title_right="Egresos facturados",
-                df_right=resumen_egr,
-            )
+            # Store for sat_views to use
+            st.session_state["prodserv_resumen_ingresos_df"] = resumen_ing
+            st.session_state["prodserv_resumen_egresos_df"] = resumen_egr
 
-            # =============================================================================
-            # KPIs debajo de las cards 
-            # =============================================================================
             h_ing = ing.headers if ing is not None else None
             c_ing = ing.conceptos if ing is not None else None
             h_egr = egr.headers if egr is not None else None
@@ -1965,9 +1961,6 @@ with tabs[0]:
             k_egr = kpi_egresos(h_egr, rfc, headers_emitidos=h_ing)
             k_int = kpi_interes(h_egr, c_egr, rfc)
 
-            # =============================================================================
-            # Ventas / Gastos / Utilidad Fiscal (tabla + gráfico)
-            # =============================================================================
             today = pd.Timestamp(st.session_state.get("cfdi_date_to") or date.today())
             y2 = today.year
             y1 = y2 - 1
@@ -1976,7 +1969,6 @@ with tabs[0]:
             def _year_window(y: int) -> tuple[pd.Timestamp, pd.Timestamp]:
                 return (pd.Timestamp(year=y, month=1, day=1), pd.Timestamp(year=y + 1, month=1, day=1))
 
-            # últimos 12 meses (por mes calendario, 12 puntos)
             start_12m = pd.Timestamp(year=today.year, month=today.month, day=1) - relativedelta(months=11)
             end_next_month = (pd.Timestamp(year=today.year, month=today.month, day=1) + relativedelta(months=1))
 
@@ -1986,14 +1978,11 @@ with tabs[0]:
             ventas_12m = _period_sum_ingresos(h_ing, rfc, start_12m, end_next_month)
             avg_ventas_12m = ventas_12m / 12.0
 
-
-
             gastos_y0 = _period_sum_egresos(h_egr, h_ing, rfc, *_year_window(y0))
             gastos_y1 = _period_sum_egresos(h_egr, h_ing, rfc, *_year_window(y1))
             gastos_y2 = _period_sum_egresos(h_egr, h_ing, rfc, *_year_window(y2))
             gastos_12m = _period_sum_egresos(h_egr, h_ing, rfc, start_12m, end_next_month)
             avg_gastos_12m = gastos_12m / 12.0
-
 
             util_y0 = ventas_y0 - gastos_y0
             util_y1 = ventas_y1 - gastos_y1
@@ -2001,18 +1990,74 @@ with tabs[0]:
             util_12m = ventas_12m - gastos_12m
             avg_util_12m   = util_12m   / 12.0
 
-            # --- YoY pesado: hacerlo bajo demanda ---
+            # Calc Monthly Utilidad Fiscal for chart
+            months = pd.date_range(start=start_12m, end=end_next_month, freq="MS")[:12]
+            rows_m = []
+            for m in months:
+                m2 = m + relativedelta(months=1)
+                v = _period_sum_ingresos(h_ing, rfc, m, m2)
+                g = _period_sum_egresos(h_egr, h_ing, rfc, m, m2)
+                rows_m.append({"Mes": m.strftime("%Y-%m"), "Ventas": float(v), "Gastos": float(g), "Utilidad Fiscal": float(v - g)})
+
+            monthly = pd.DataFrame(rows_m)
+            st.session_state["utilidad_fiscal_12m_df"] = monthly
+
+            # Calc Top 10 Clientes / Proveedores
+            d_from_conc = st.session_state.get("cfdi_date_from_value") or st.session_state.get("cfdi_date_from")
+            d_to_conc = st.session_state.get("cfdi_date_to_value") or st.session_state.get("cfdi_date_to")
+
+            if d_from_conc is None:
+                d_from_conc = date.today() - timedelta(days=365)
+            if d_to_conc is None:
+                d_to_conc = date.today()
+
+            from_dt = pd.Timestamp(d_from_conc).strftime("%Y-%m-%d")
+            to_dt = pd.Timestamp(d_to_conc).strftime("%Y-%m-%d")
+
+            rfc_for_conc = st.session_state.get("last_rfc") or rfc
+
+            conc_customers, conc_suppliers = _concentration_from_cfdi_headers(
+                rfc=rfc_for_conc,
+                ing_headers=h_ing,
+                egr_headers=h_egr,
+            )
+
+            df_customers = _conc_to_df(conc_customers)
+            keep_cols_c = ["name", "_total_num", "transactions", "_share_num"]
+            df_c = df_customers[[c for c in keep_cols_c if c in df_customers.columns]].copy()
+            df_c = df_c.rename(columns={"name": "Cliente", "_total_num": "Monto", "_share_num": "Participación %"})
+            st.session_state["top10_clientes_df"] = df_c
+
+            df_suppliers = _conc_to_df(conc_suppliers)
+            keep_cols_s = ["name", "_total_num", "transactions", "_share_num"]
+            df_s = df_suppliers[[c for c in keep_cols_s if c in df_suppliers.columns]].copy()
+            df_s = df_s.rename(columns={"name": "Proveedor", "_total_num": "Monto", "_share_num": "Participación %"})
+            st.session_state["top10_proveedores_df"] = df_s
+
+            # =============================================================================
+            # UPGRADED RENDER COMPONENT
+            # =============================================================================
+            render_tax_status_cards(tax_status)
+
+            # =============================================================================
+            # PROD/SERV DUAL CARDS
+            # =============================================================================
+            render_prodserv_dual_cards(
+                title_left="Ingresos facturados",
+                df_left=resumen_ing,
+                title_right="Egresos facturados",
+                df_right=resumen_egr,
+            )
+
+            # =============================================================================
+            # Ventas / Utilidad Fiscal Table & YoY KPIs
+            # =============================================================================
             calc_yoy = st.checkbox(
                 "Calcular YoY (últimos 12M vs 12M previos) [tarda más]",
                 value=st.session_state.get("_calc_yoy", False),
                 key="_calc_yoy",
             )
 
-
-            # ================================
-            # Crec. vs 12M previos (YoY 12M) - INDEPENDIENTE del rango seleccionado
-            # ================================
-            # valores por default (si no se calcula YoY)
             ventas_12m_yoy = gastos_12m_yoy = util_12m_yoy = 0.0
             ventas_prev_12m = gastos_prev_12m = util_prev_12m = 0.0
             g_ventas_12m = g_gastos_12m = g_util_12m = None
@@ -2050,15 +2095,8 @@ with tabs[0]:
                     g_gastos_12m = _growth_pct(gastos_12m_yoy, gastos_prev_12m)
                     g_util_12m = _growth_pct(util_12m_yoy, util_prev_12m)
 
-
-            #==================================================
-            # 
-            # =================================================
-
             with st.container(border=True):
                 st.markdown("### 💲 Ventas y Utilidad Fiscal")
-
-
 
                 def _fmt_pct(x: float | None) -> str:
                     return "—" if x is None else f"{x:,.2f}%"
@@ -2097,8 +2135,6 @@ with tabs[0]:
                     index=["Ventas Anuales", "Gastos Anuales", "Utilidad Fiscal"],
                 )
 
-
-
                 st.dataframe(tbl, use_container_width=True)
 
                 # KPIs en una sola línea debajo (fuente más chica)
@@ -2115,172 +2151,6 @@ with tabs[0]:
                     unsafe_allow_html=True,
                 )
 
-
-            # gráfico mensual de utilidad fiscal (últimos 12 meses) con barras ventas vs gastos
-            months = pd.date_range(start=start_12m, end=end_next_month, freq="MS")[:12]
-            rows = []
-            for m in months:
-                m2 = m + relativedelta(months=1)
-                v = _period_sum_ingresos(h_ing, rfc, m, m2)
-                g = _period_sum_egresos(h_egr, h_ing, rfc, m, m2)
-                rows.append({"Mes": m.strftime("%Y-%m"), "Ventas": float(v), "Gastos": float(g), "Utilidad Fiscal": float(v - g)})
-
-            monthly = pd.DataFrame(rows)
-
-            with st.container(border=True):
-                import altair as alt
-
-                # Dropdown para seleccionar qué serie ver (tomadas de la misma tabla / cálculo base)
-                sel_metric = st.selectbox(
-                    "Mostrar",
-                    options=[
-                        "Utilidad Fiscal últimos 12 meses",
-                        "Ventas Anuales",
-                        "Gastos Anuales",
-                    ],
-                    index=0,
-                    key="sat_last12_metric",
-                )
-
-                # Mapeo: nombres UI -> columna en `monthly`
-                metric_map = {
-                    "Utilidad Fiscal últimos 12 meses": "Utilidad Fiscal",
-                    "Ventas Anuales": "Ventas",
-                    "Gastos Anuales": "Gastos",
-                }
-
-                col = metric_map.get(sel_metric, "Utilidad Fiscal")
-
-                # Título dinámico
-                st.markdown(f"### 📈 {sel_metric}")
-
-                # Dataset para graficar SOLO la métrica seleccionada
-                d_plot = monthly[["Mes", col]].rename(columns={col: "Monto"}).copy()
-
-                chart = (
-                    alt.Chart(d_plot)
-                    .mark_bar()
-                    .encode(
-                        x=alt.X("Mes:N", title="Mes"),
-                        y=alt.Y("Monto:Q", title="Monto"),
-                        tooltip=["Mes:N", alt.Tooltip("Monto:Q", format=",.2f")],
-                    )
-                    .properties(height=320)
-                )
-
-                st.altair_chart(chart, use_container_width=True)
-
-
-            # =============================================================================
-            # Top 10 Clientes / Proveedores (Syntage)
-            # =============================================================================
-            # Respeta filtro Desde/Hasta del usuario (si existe)
-            d_from_conc = st.session_state.get("cfdi_date_from_value") or st.session_state.get("cfdi_date_from")
-            d_to_conc = st.session_state.get("cfdi_date_to_value") or st.session_state.get("cfdi_date_to")
-
-            # fallback por si algo viene vacío
-            if d_from_conc is None:
-                d_from_conc = date.today() - timedelta(days=365)
-            if d_to_conc is None:
-                d_to_conc = date.today()
-
-            # ISO UTC (incluye día completo)
-            from_dt = pd.Timestamp(d_from_conc).strftime("%Y-%m-%d")
-            to_dt = pd.Timestamp(d_to_conc).strftime("%Y-%m-%d")
-
-
-            rfc_for_conc = st.session_state.get("last_rfc") or rfc
-
-            # ✅ NUEVO: concentración calculada 100% desde CFDI descargados (headers)
-            conc_customers, conc_suppliers = _concentration_from_cfdi_headers(
-                rfc=rfc_for_conc,
-                ing_headers=ing.headers if ing is not None else None,
-                egr_headers=egr.headers if egr is not None else None,
-            )
-
-
-            df_customers = _conc_to_df(conc_customers)
-            df_suppliers = _conc_to_df(conc_suppliers)
-
-            cols_conc = st.columns(2)
-            with cols_conc[0]:
-                with st.container(border=True):
-                    st.markdown("### 🧑‍💼 Top 10 Clientes")
-                    if df_customers.empty:
-                        st.info("Sin datos de concentración de clientes para el periodo.")
-                    else:
-                        _render_donut(df_customers, title="Distribución")
-                        # Tabla interactiva: mantener numéricos para sort correcto
-                        df_show = df_customers.copy()
-
-                        # Nos quedamos con lo útil + numérico
-                        keep = ["name", "transactions", "_share_num", "_total_num"]
-                        df_show = df_show[[c for c in keep if c in df_show.columns]].copy()
-
-                        # Renombrar para UI
-                        df_show = df_show.rename(
-                            columns={
-                                "name": "Cliente",
-                                "transactions": "# CFDI",
-                                "_share_num": "Participación %",
-                                "_total_num": "Monto",
-                            }
-                        )
-
-                        # --- redondeos numéricos (siguen siendo numéricos) ---
-                        if "Monto" in df_show.columns:
-                            df_show["Monto"] = pd.to_numeric(df_show["Monto"], errors="coerce").fillna(0).round(0)
-                        if "Participación %" in df_show.columns:
-                            df_show["Participación %"] = pd.to_numeric(df_show["Participación %"], errors="coerce").fillna(0).round(2)
-                        if "# CFDI" in df_show.columns:
-                            df_show["# CFDI"] = pd.to_numeric(df_show["# CFDI"], errors="coerce").fillna(0).astype(int)
-
-                        # --- formato SOLO visual (no convierte df_show a string) ---
-                        sty = df_show.style.format(
-                            {
-                                "Monto": "${:,.0f}",            # moneda sin decimales
-                                "Participación %": "{:,.2f}",   # si quieres con % lo hacemos luego
-                            }
-                        )
-
-                        st.dataframe(sty, use_container_width=True, hide_index=True)
-
-            with cols_conc[1]:
-                with st.container(border=True):
-                    st.markdown("### 🏭 Top 10 Proveedores")
-                    if df_suppliers.empty:
-                        st.info("Sin datos de concentración de proveedores para el periodo.")
-                    else:
-                        _render_donut(df_suppliers, title="Distribución")
-                        df_show = df_suppliers.copy()
-
-                        keep = ["name", "transactions", "_share_num", "_total_num"]
-                        df_show = df_show[[c for c in keep if c in df_show.columns]].copy()
-
-                        df_show = df_show.rename(
-                            columns={
-                                "name": "Proveedor",
-                                "transactions": "# CFDI",
-                                "_share_num": "Participación %",
-                                "_total_num": "Monto",
-                            }
-                        )
-
-                        if "Monto" in df_show.columns:
-                            df_show["Monto"] = pd.to_numeric(df_show["Monto"], errors="coerce").fillna(0).round(0)
-                        if "Participación %" in df_show.columns:
-                            df_show["Participación %"] = pd.to_numeric(df_show["Participación %"], errors="coerce").fillna(0).round(2)
-                        if "# CFDI" in df_show.columns:
-                            df_show["# CFDI"] = pd.to_numeric(df_show["# CFDI"], errors="coerce").fillna(0).astype(int)
-
-                        sty = df_show.style.format(
-                            {
-                                "Monto": "${:,.0f}",
-                                "Participación %": "{:,.2f}",
-                            }
-                        )
-
-                        st.dataframe(sty, use_container_width=True, hide_index=True)
 
             # =============================================================================
             # Prod/Serv (resumen)_egresos (MISMA card que en Facturas, con filtros)
@@ -2333,23 +2203,23 @@ with tabs[0]:
                 if cli_net is None or cli_net.empty:
                     st.info("Sin clientes para el periodo.")
                 else:
-                            d = cli_net.copy().reset_index(drop=True)
+                    d = cli_net.copy().reset_index(drop=True)
 
-                            money_cols = ["Facturas (I)", "Notas crédito (E)", "Emitido Neto"]
-                            for c in money_cols:
-                                if c in d.columns:
-                                    d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0).round(0)
+                    money_cols = ["Facturas (I)", "Notas crédito (E)", "Emitido Neto"]
+                    for c in money_cols:
+                        if c in d.columns:
+                            d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0).round(0)
 
-                            # ✅ sanitiza (pero sin tocar las columnas numéricas)
-                            d = _st_safe_df(d)
+                    # ✅ sanitiza (pero sin tocar las columnas numéricas)
+                    d = _st_safe_df(d)
 
-                            MAX_ROWS = 5000
-                            d_show = d.head(MAX_ROWS) if len(d) > MAX_ROWS else d
+                    MAX_ROWS = 5000
+                    d_show = d.head(MAX_ROWS) if len(d) > MAX_ROWS else d
 
-                            # ✅ formato moneda SOLO visual (no convierte el DF a string)
-                            sty = d_show.style.format({c: "${:,.0f}" for c in money_cols if c in d_show.columns})
+                    # ✅ formato moneda SOLO visual (no convierte el DF a string)
+                    sty = d_show.style.format({c: "${:,.0f}" for c in money_cols if c in d_show.columns})
 
-                            st.dataframe(sty, use_container_width=True, hide_index=True)
+                    st.dataframe(sty, use_container_width=True, hide_index=True)
 
 
             with st.container(border=True):
@@ -2664,7 +2534,6 @@ with tabs[0]:
                     height=260,
                 )
             
-
 
     else:
         st.info("Ingresa un RFC arriba, selecciona fuente/rango CFDI y presiona Calcular.")
