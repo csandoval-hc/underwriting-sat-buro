@@ -5,5 +5,5 @@ pydantic==2.8.2
 pandas==2.2.2
 python-dateutil==2.9.0.post0
 altair>=5.0.0
-streamlit-aggrid==1.0.5
+
 numpy==1.26.4
