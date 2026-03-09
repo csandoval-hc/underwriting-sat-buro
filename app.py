@@ -46,6 +46,7 @@ from underwriting.infrastructure.syntage_client import SyntageClient
 from underwriting.application.sat_service import SatService
 from underwriting.application.cfdi_service import CfdiService
 from underwriting.ui.sat_views import render_tax_status_cards
+from underwriting.ui.cfdi_views import render_prodserv_dual_cards
 from types import SimpleNamespace
 from underwriting.application.buro_service import obtener_buro_moffin_por_rfc
 from underwriting.application.cap_table_service import CapTableService
