@@ -2685,6 +2685,23 @@ with tabs[0]:
 # TAB 1: BURO
 # =============================================================================
 with tabs[1]:
+    def _normalize_buro_result(resultado):
+        """
+        Normaliza la salida de obtener_buro_moffin_por_rfc():
+          - PF -> DataFrame
+          - PM -> (DataFrame, personas)
+        Devuelve: (df, personas)
+        """
+        if resultado is None:
+            return None, None
+        if isinstance(resultado, tuple):
+            if len(resultado) >= 1:
+                df = resultado[0]
+                personas = resultado[1] if len(resultado) > 1 else None
+                return df, personas
+            return None, None
+        return resultado, None
+
     # ✅ Botón de Descarga PDF en la pestaña Buró
     render_pdf_download_button()
 
@@ -3023,12 +3040,13 @@ with tabs[1]:
                     with tabs_dinamicos_buro[i]:
 
                         try:
-                            df_pf = obtener_buro_moffin_por_rfc(rfc_accionista)
+                            resultado_pf = obtener_buro_moffin_por_rfc(rfc_accionista)
+                            df_pf, _ = _normalize_buro_result(resultado_pf)
                         except Exception:
                             st.warning("No se pudo consultar el buró del accionista.")
                             continue
 
-                        if df_pf is None or df_pf.empty:
+                        if df_pf is None or not isinstance(df_pf, pd.DataFrame) or df_pf.empty:
                             st.info("Sin información de buró.")
                             continue
 
@@ -3142,12 +3160,13 @@ with tabs[1]:
                     with tabs_dinamicos_buro[offset + j]:
 
                         try:
-                            df_pf = obtener_buro_moffin_por_rfc(rfc_manual)
+                            resultado_pf = obtener_buro_moffin_por_rfc(rfc_manual)
+                            df_pf, _ = _normalize_buro_result(resultado_pf)
                         except Exception:
                             st.warning("No se pudo consultar el buró.")
                             continue
 
-                        if df_pf is None or df_pf.empty:
+                        if df_pf is None or not isinstance(df_pf, pd.DataFrame) or df_pf.empty:
                             st.info("Sin información.")
                             continue
 
