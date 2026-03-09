@@ -392,7 +392,341 @@ def fetch_ciec_updated_at(rfc: str) -> str | None:
         return None
     return dt.strftime("%Y-%m-%d %H:%M")
 
+@st.cache_data(show_spinner=False, ttl=60 * 10)
+def fetch_syntage_accounts_time_series(
+    rfc: str,
+    *,
+    kind: str,  # "receivable" | "payable"
+    from_dt: str | None = None,  # "YYYY-MM-DDT00:00:00Z"
+    to_dt: str | None = None,    # "YYYY-MM-DDT23:59:59Z"
+    periodicity: str = "monthly" # daily|weekly|monthly|quarterly|yearly
+) -> dict | None:
+    api_key = os.getenv("SYNTAGE_API_KEY", "")
+    if not api_key:
+        return None
 
+    r = _clean_rfc(rfc)
+    if not r:
+        return None
+
+    if kind == "receivable":
+        endpoint = "accounts-receivable"
+    elif kind == "payable":
+        endpoint = "accounts-payable"
+    else:
+        return None
+
+    url = f"{SYNTAGE_BASE_URL}/taxpayers/{r}/insights/{endpoint}"
+
+    params = {"options[periodicity]": periodicity}
+    if from_dt:
+        params["options[from]"] = from_dt
+    if to_dt:
+        params["options[to]"] = to_dt
+
+    try:
+        resp = requests.get(
+            url,
+            headers={
+                "X-API-Key": api_key,
+                "Accept": "application/ld+json",
+            },
+            params=params,
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return None
+
+        obj = resp.json() or {}
+        data = obj.get("data") or {}
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _accounts_payload_to_df(data: dict | None) -> pd.DataFrame:
+    """
+    Convierte payload de Syntage a DF mensual con:
+      - Pendiente (Due)
+      - Pagado (Paid)
+      - Pendiente Acumulado (Cumulative Due)
+    """
+    if not data or not isinstance(data, dict):
+        return pd.DataFrame(columns=["period", "Pendiente", "Pagado", "Pendiente Acumulado"])
+
+    nonc = data.get("nonCumulative") or []
+    cum = data.get("cumulative") or []
+
+    def _norm(rows) -> pd.DataFrame:
+        if not isinstance(rows, list) or not rows:
+            return pd.DataFrame(columns=["startDate", "label", "metric"])
+        df = pd.DataFrame(rows)
+        for c in ["startDate", "label", "metric"]:
+            if c not in df.columns:
+                df[c] = None
+        df["startDate"] = pd.to_datetime(df["startDate"], errors="coerce", utc=True)
+        df["label"] = df["label"].astype(str).fillna("").str.strip()
+        df["metric"] = pd.to_numeric(df["metric"], errors="coerce").fillna(0.0)
+        return df.dropna(subset=["startDate"])
+
+    df_n = _norm(nonc)
+    df_c = _norm(cum)
+
+    n_piv = (
+        df_n.pivot_table(index="startDate", columns="label", values="metric", aggfunc="sum")
+        if not df_n.empty
+        else pd.DataFrame()
+    )
+
+    c_piv = (
+        df_c.pivot_table(index="startDate", columns="label", values="metric", aggfunc="sum")
+        if not df_c.empty
+        else pd.DataFrame()
+    )
+
+    def _get_col(piv: pd.DataFrame, *cands: str) -> pd.Series:
+        if piv is None or piv.empty:
+            return pd.Series(dtype="float64")
+        cols = {str(c).strip().lower(): c for c in piv.columns}
+        for cand in cands:
+            k = cand.strip().lower()
+            if k in cols:
+                return piv[cols[k]]
+        return pd.Series([0.0] * len(piv), index=piv.index, dtype="float64")
+
+    due = _get_col(n_piv, "Due", "Pending", "Pendiente")
+    paid = _get_col(n_piv, "Paid", "Pagado")
+    cum_due = _get_col(
+        c_piv,
+        "Cumulative Due",
+        "Cumulated Due",
+        "Cumulative Pending",
+        "Pendiente Acumulado",
+    )
+
+    idx = n_piv.index if not n_piv.empty else c_piv.index
+    if idx is None or len(idx) == 0:
+        return pd.DataFrame(columns=["period", "Pendiente", "Pagado", "Pendiente Acumulado"])
+
+    out = pd.DataFrame(index=idx).sort_index()
+    out["Pendiente"] = due.reindex(out.index).fillna(0.0)
+    out["Pagado"] = paid.reindex(out.index).fillna(0.0)
+    out["Pendiente Acumulado"] = cum_due.reindex(out.index).fillna(0.0)
+
+    out["period"] = out.index.tz_convert("America/Mexico_City").to_period("M").astype(str)
+
+    return out.reset_index(drop=True)[["period", "Pendiente", "Pagado", "Pendiente Acumulado"]]
+
+
+def _render_accounts_bars_with_cum_line(df: pd.DataFrame, *, title: str, key: str) -> None:
+    if df is None or df.empty:
+        st.info("Sin datos para el periodo.")
+        return
+
+    import altair as alt
+
+    d = df.copy()
+    for c in ["Pendiente", "Pagado", "Pendiente Acumulado"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
+
+    d_long = d.melt(
+        id_vars=["period", "Pendiente Acumulado"],
+        value_vars=["Pendiente", "Pagado"],
+        var_name="Estado",
+        value_name="Monto",
+    )
+
+    bars = (
+        alt.Chart(d_long)
+        .mark_bar()
+        .encode(
+            x=alt.X("period:N", title=None),
+            y=alt.Y("Monto:Q", title=None),
+            color=alt.Color("Estado:N", legend=alt.Legend(orient="bottom")),
+            tooltip=["period:N", "Estado:N", alt.Tooltip("Monto:Q", format=",.0f")],
+        )
+    )
+
+    line = (
+        alt.Chart(d)
+        .mark_line(strokeDash=[4, 3])
+        .encode(
+            x=alt.X("period:N"),
+            y=alt.Y("Pendiente Acumulado:Q"),
+            tooltip=["period:N", alt.Tooltip("Pendiente Acumulado:Q", format=",.0f")],
+        )
+    )
+
+    st.markdown(f"### {title}")
+    st.altair_chart((bars + line).properties(height=280), use_container_width=True)
+
+    st.dataframe(
+        d.style.format({
+            "Pendiente": "${:,.0f}",
+            "Pagado": "${:,.0f}",
+            "Pendiente Acumulado": "${:,.0f}",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+@st.cache_data(show_spinner=False, ttl=60 * 10)
+def fetch_syntage_financial_institutions(
+    rfc: str,
+    *,
+    lev_from_dt: str | None = None,
+    lev_to_dt: str | None = None,
+) -> list[dict] | None:
+    api_key = os.getenv("SYNTAGE_API_KEY", "")
+    if not api_key:
+        return None
+
+    r = _clean_rfc(rfc)
+    if not r:
+        return None
+
+    url = f"{SYNTAGE_BASE_URL}/insights/{r}/financial-institutions"
+
+    params = {}
+    if lev_from_dt:
+        params["options[from]"] = lev_from_dt
+    if lev_to_dt:
+        params["options[to]"] = lev_to_dt
+
+    try:
+        resp = requests.get(
+            url,
+            headers={"X-API-Key": api_key, "Accept": "application/ld+json"},
+            params=params,
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return None
+
+        obj = resp.json() or {}
+        data = obj.get("data")
+        return data if isinstance(data, list) else None
+    except Exception:
+        return None
+
+
+def _months_between(lev_from_date: pd.Timestamp, lev_to_date: pd.Timestamp) -> list[str]:
+    start = lev_from_date.to_period("M")
+    end = lev_to_date.to_period("M")
+    periods = pd.period_range(start=start, end=end, freq="M")
+    return [str(p) for p in periods]
+
+
+def _fi_payload_to_df(
+    items: list[dict] | None,
+    *,
+    lev_months: list[str],
+) -> pd.DataFrame:
+    if not items:
+        return pd.DataFrame(columns=["Nombre", "Total", "Importe de transacción mensual"])
+
+    rows = []
+    for it in items:
+        sector = (it.get("sector") or "Sin sector").strip()
+        name = (it.get("tradeName") or it.get("legalName") or it.get("rfc") or "Institución").strip()
+        total = float(it.get("total") or 0)
+
+        tx = it.get("transactions") or []
+        tx_map = {}
+        if isinstance(tx, list):
+            for t in tx:
+                k = t.get("date")
+                v = t.get("total")
+                if k:
+                    try:
+                        tx_map[str(k)] = float(v or 0)
+                    except Exception:
+                        tx_map[str(k)] = 0.0
+
+        series = [tx_map.get(m, 0.0) for m in lev_months]
+
+        rows.append(
+            {
+                "_sector": sector,
+                "_is_sector": False,
+                "Nombre": f"   {name}",
+                "Total": total,
+                "Importe de transacción mensual": series,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+
+    if df.empty:
+        return pd.DataFrame(columns=["Nombre", "Total", "Importe de transacción mensual"])
+
+    sector_rows = []
+    for sector, g in df.groupby("_sector", dropna=False):
+        tot = float(g["Total"].sum())
+        agg = [0.0] * len(lev_months)
+        for s in g["Importe de transacción mensual"].tolist():
+            for i, v in enumerate(s):
+                agg[i] += float(v or 0.0)
+
+        sector_rows.append(
+            {
+                "_sector": sector,
+                "_is_sector": True,
+                "Nombre": str(sector),
+                "Total": tot,
+                "Importe de transacción mensual": agg,
+            }
+        )
+
+    df_sector = pd.DataFrame(sector_rows)
+
+    out = []
+    for sector in df_sector.sort_values("Total", ascending=False)["_sector"].tolist():
+        out.append(df_sector[df_sector["_sector"] == sector])
+        out.append(df[df["_sector"] == sector].sort_values("Total", ascending=False))
+
+    out_df = pd.concat(out, ignore_index=True)
+    return out_df[["Nombre", "Total", "Importe de transacción mensual"]]
+
+
+def render_apalancamiento_table(*, rfc: str) -> None:
+    lev_from = st.session_state.get("cfdi_date_from")
+    lev_to = st.session_state.get("cfdi_date_to")
+
+    if not lev_from or not lev_to:
+        st.info("Selecciona un rango de fechas arriba.")
+        return
+
+    lev_from_dt = pd.Timestamp(lev_from).strftime("%Y-%m-%dT00:00:00")
+    lev_to_dt = pd.Timestamp(lev_to).strftime("%Y-%m-%dT23:59:59")
+
+    lev_months = _months_between(pd.Timestamp(lev_from), pd.Timestamp(lev_to))
+
+    items = fetch_syntage_financial_institutions(
+        rfc,
+        lev_from_dt=lev_from_dt,
+        lev_to_dt=lev_to_dt,
+    )
+
+    df = _fi_payload_to_df(items, lev_months=lev_months)
+
+    if df.empty:
+        st.info("Sin datos de instituciones financieras para el periodo seleccionado.")
+        return
+
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Nombre": st.column_config.TextColumn("Nombre"),
+            "Total": st.column_config.NumberColumn("Total"),
+            "Importe de transacción mensual": st.column_config.LineChartColumn(
+                "Importe de transacción mensual",
+                help="Serie mensual de transacciones con la institución.",
+            ),
+        },
+    )
 
 def _conc_to_df(conc_list) -> pd.DataFrame:
     """
@@ -2421,6 +2755,71 @@ with tabs[0]:
                     else:
                         # Mismo formato que Clientes/Proveedores: AG Grid con filtros
                         render_filterable_grid(df_cap, key="sat_cap_table_grid")
+
+            # =============================================================================
+            # Cuentas por pagar / cobrar (Syntage)
+            # =============================================================================
+            with st.container(border=True):
+                st.markdown("## 🧾 Cuentas por pagar y por cobrar (desde Syntage)")
+
+                acc_rfc = st.session_state.get("last_rfc") or rfc
+
+                acc_from = st.session_state.get("cfdi_date_from")
+                acc_to = st.session_state.get("cfdi_date_to")
+
+                if not acc_rfc or not (12 <= len(acc_rfc) <= 13):
+                    st.info("Ingresa un RFC válido arriba y presiona Calcular.")
+                elif not acc_from or not acc_to:
+                    st.info("Selecciona un rango de fechas arriba.")
+                else:
+                    from_dt_acc = pd.Timestamp(acc_from).strftime("%Y-%m-%dT00:00:00Z")
+                    to_dt_acc = pd.Timestamp(acc_to).strftime("%Y-%m-%dT23:59:59Z")
+
+                    raw_ap = fetch_syntage_accounts_time_series(
+                        acc_rfc,
+                        kind="payable",
+                        from_dt=from_dt_acc,
+                        to_dt=to_dt_acc,
+                        periodicity="monthly",
+                    )
+                    raw_ar = fetch_syntage_accounts_time_series(
+                        acc_rfc,
+                        kind="receivable",
+                        from_dt=from_dt_acc,
+                        to_dt=to_dt_acc,
+                        periodicity="monthly",
+                    )
+
+                    df_ap = _accounts_payload_to_df(raw_ap)
+                    df_ar = _accounts_payload_to_df(raw_ar)
+
+                    col_ap, col_ar = st.columns(2)
+
+                    with col_ap:
+                        _render_accounts_bars_with_cum_line(
+                            df_ap,
+                            title="Cuentas por pagar",
+                            key="tbl_accounts_payable",
+                        )
+
+                    with col_ar:
+                        _render_accounts_bars_with_cum_line(
+                            df_ar,
+                            title="Cuentas por cobrar",
+                            key="tbl_accounts_receivable",
+                        )
+
+            # =============================================================================
+            # Apalancamiento
+            # =============================================================================
+            with st.container(border=True):
+                st.markdown("Apalancamiento")
+
+                lev_rfc = st.session_state.get("last_rfc") or rfc
+                if not lev_rfc or not (12 <= len(lev_rfc) <= 13):
+                    st.info("Ingresa un RFC válido arriba y presiona Calcular.")
+                else:
+                    render_apalancamiento_table(rfc=lev_rfc)
             
             # =============================================================================
             # Empleados (Syntage Insights) jd
@@ -3038,6 +3437,11 @@ with tabs[1]:
                 for i, rfc_accionista in enumerate(rfcs_base):
 
                     with tabs_dinamicos_buro[i]:
+                        
+                        rfc_accionista = str(rfc_accionista).strip().upper()
+                        if len(rfc_accionista) != 13:
+                            st.warning(f"El RFC {rfc_accionista} no es PF y se omitió en esta vista.")
+                            continue
 
                         try:
                             resultado_pf = obtener_buro_moffin_por_rfc(rfc_accionista)
@@ -3158,6 +3562,11 @@ with tabs[1]:
                 for j, rfc_manual in enumerate(rfcs_extra):
 
                     with tabs_dinamicos_buro[offset + j]:
+                        
+                        rfc_manual = str(rfc_manual).strip().upper()
+                        if len(rfc_manual) != 13:
+                            st.warning(f"El RFC {rfc_manual} no es PF y se omitió en esta vista.")
+                            continue
 
                         try:
                             resultado_pf = obtener_buro_moffin_por_rfc(rfc_manual)
